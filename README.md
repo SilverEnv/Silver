@@ -9,7 +9,7 @@ small: [`AGENTS.md`](AGENTS.md) is the map, and `docs/` is the system of record.
 
 ## Current State
 
-- Git remote: `https://github.com/peakyragnar/Silver.git`
+- Git remote: `https://github.com/SilverEnv/Silver.git`
 - Build status: harness scaffold only
 - Primary milestone: Phase 1 foundation from `SPEC.md`
 

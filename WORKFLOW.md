@@ -15,7 +15,7 @@ workspace:
   root: ~/silver-agent-workspaces
 hooks:
   after_create: |
-    git clone --depth 1 https://github.com/peakyragnar/Silver.git .
+    git clone --depth 1 https://github.com/SilverEnv/Silver.git .
     if [ -f .codex/worktree_init.sh ]; then
       bash .codex/worktree_init.sh
     fi
