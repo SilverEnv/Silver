@@ -1,0 +1,1296 @@
+# Quiver — Build Specification v1.0
+
+> *"For each security, on each as-of date: what was knowable, what features existed, what did Quiver predict, what portfolio would it hold, and what happened?"*
+
+---
+
+## 1. Mission
+
+Quiver is a point-in-time prediction and backtesting system for US equity forward returns. Its purpose is to determine, with rigor and reproducibility, whether modern AI-extracted signals can predict stock returns net of trading costs better than well-known numeric baselines.
+
+Quiver is not a research dashboard, an analyst chatbot, a valuation engine, or a portfolio reporting tool. It is a falsification machine for one investment thesis.
+
+**The thesis being tested:**
+
+> Modern LLMs can extract structured signals from transcripts, filings, and news at a scale humans cannot, and at least some of those signals may improve forward-return prediction when tested rigorously against future prices, after costs, across regimes.
+
+**The success criterion:**
+
+> AI-derived text features improve out-of-sample, net-of-cost prediction over numeric-only baselines, and survive label-scramble tests, multiple-comparisons correction, and adversarial review.
+
+If the thesis fails, Quiver should fail it cleanly and report the failure. The system is engineered to admit "no edge" as a valid output.
+
+---
+
+## 2. Scope and Boundaries
+
+**In scope:**
+- US-listed common equities and ADRs trading on NYSE / Nasdaq / NYSE-Arca / NYSE-American
+- Daily-frequency observations
+- Forward-return horizons of 5, 30, 90, and 365 trading days
+- Initial universe of ~40–50 tickers for falsifier; expand to ~500 if falsifier survives
+- Numeric features (deterministic from prices + fundamentals)
+- Text features (LLM-extracted from transcripts, filings, news)
+- Walk-forward backtests with realistic transaction costs
+- Paper trading simulation
+- Hypothesis generation, validation, and lifecycle
+
+**Out of scope (v1):**
+- Live capital deployment
+- Options, futures, fixed income, crypto, foreign equities
+- Intraday-frequency signals
+- Real-time market microstructure
+- Reinforcement learning
+- Manual analyst override workflows
+- Web UI (CLI scripts only until paper trading runtime)
+- Multi-user collaboration
+- News from non-public social channels
+- Insider transaction analytics (deferred phase 2+)
+- Macro regime models beyond manual era splits
+
+**Allowed external dependencies:**
+- FMP (Financial Modeling Prep) for fundamentals, transcripts, prices, corporate actions
+- SEC EDGAR for raw filings and XBRL companyfacts
+- Optional: Arrow's local raw data caches under `~/Arrow/data/raw/` as a vendor-byte mirror to skip rate-limited re-fetching
+- Optional: Norgate Premium Data for delisting history when scaling beyond falsifier
+
+**Disallowed dependencies:**
+- Arrow's analyst-facing views (`v_company_period_wide`, `v_metrics_*`, etc.)
+- Arrow's normalization opinions (`extraction_version` preference order, supersession chains)
+- Arrow's Python code or schema imports
+- Any consumer-facing third-party dashboard
+
+---
+
+## 3. Three Laws (Day-One Invariants)
+
+These are non-negotiable and enforced in code:
+
+1. **No feature without `available_at`.** Every feature value carries a timestamp earlier than which the value is invisible to any backtest.
+2. **No prediction without a frozen feature version.** Predictions reference exact `feature_definition_id` + `model_version` + `prompt_version` tuples. Re-running a backtest yields identical predictions.
+3. **No backtest result without costs, baseline comparison, and reproducibility metadata.** Every reported metric is net of transaction costs, accompanied by at least one baseline (numeric-only ensemble), and traceable to a specific `model_run_id` with `code_git_sha`, feature set hash, training window, random seed, and execution-assumption set.
+
+Violation of any law invalidates downstream claims. The system refuses to write results that violate the laws.
+
+---
+
+## 4. Native Objects
+
+The world Quiver models:
+
+| Object | Definition |
+|---|---|
+| **Security** | A tradable equity instrument (ticker + identifier history) |
+| **Universe** | A point-in-time set of securities Quiver considers eligible |
+| **Trading calendar** | Days the US equity market is open, including early closes |
+| **Event** | Something newly observable about a security (earnings call, 8-K, news item) |
+| **Artifact** | Source material attached to an event (transcript text, 10-K HTML, news article body) |
+| **Raw object** | Verbatim vendor response with cryptographic hash, request fingerprint, fetched_at |
+| **Fundamental fact** | Numeric financial datum (revenue, COGS, etc.) tagged with PIT timestamps |
+| **Price** | Daily OHLCV + adjusted-close, with corporate-action history |
+| **Feature** | Numeric signal (deterministic or AI-extracted) computable as of any asof_date |
+| **Label** | Realized forward return at a horizon, computed after the horizon elapses |
+| **Hypothesis** | A testable rule mapping (feature combinations) → predicted excess return |
+| **Prediction** | A frozen model output for (security, asof_date, horizon), made before the label was known |
+| **Backtest run** | A reproducible execution of a hypothesis against a date range with full metadata |
+| **Model run** | A specific (code_sha, feature_set, training_window, seed) tuple producing predictions |
+| **Portfolio** | A weighted basket of positions (simulated or paper) on a given date |
+| **Outcome** | Scored result of a prediction or portfolio against realized returns |
+| **Risk event** | An automatic control trigger (drawdown halt, capacity breach, data quality block) |
+
+Anything not in this list is a feature of one of these objects, not a primitive.
+
+---
+
+## 5. Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      EXTERNAL SOURCES                           │
+│  FMP  •  SEC EDGAR  •  News vendor (deferred)                   │
+│                                                                  │
+│  (Optional bootstrap: Arrow's ~/Arrow/data/raw/ as local mirror)│
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    INGEST LAYER (clients + raw vault)           │
+│  • FMP client  • SEC client  • Polite HTTP w/ rate limit       │
+│  • RawVault    →  quiver.raw_objects (immutable, hashed)       │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              POINT-IN-TIME NORMALIZATION LAYER                   │
+│  Source adapters convert raw objects to Quiver-native rows.      │
+│  available_at policy applied per source.                         │
+│                                                                  │
+│  →  events  →  artifacts  →  fundamental_facts                  │
+│  →  prices_daily  →  corporate_actions                          │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                          FEATURE STORE                           │
+│                                                                  │
+│  ┌────────────────────────┐    ┌────────────────────────┐       │
+│  │  NUMERIC FEATURES      │    │  TEXT FEATURES         │       │
+│  │  Deterministic from    │    │  AI-extracted from     │       │
+│  │  facts + prices        │    │  artifacts via LLM     │       │
+│  │                        │    │                        │       │
+│  │  Computed on demand;   │    │  Computed once at      │       │
+│  │  immutable per         │    │  artifact ingest;      │       │
+│  │  feature_definition    │    │  immutable per         │       │
+│  │  version               │    │  (model_version,       │       │
+│  │                        │    │   prompt_version)      │       │
+│  └────────────────────────┘    └────────────────────────┘       │
+│                          ↓                                       │
+│            quiver.feature_values (versioned, PIT)               │
+│            quiver.feature_snapshots (frozen for replay)         │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                          LABELS                                  │
+│  Forward returns at 5/30/90/365 days; raw and excess           │
+│  Computed deterministically from prices + corporate_actions     │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      BACKTEST ENGINE                             │
+│  Walk-forward CV  •  Regime slices  •  Transaction costs       │
+│  Baseline comparison  •  Label-scramble tests                   │
+│  Multiple-comparisons correction  •  Capacity estimates         │
+│  Drawdown / factor-exposure metrics                             │
+│                                                                  │
+│  →  quiver.backtest_runs  →  quiver.model_runs                  │
+│  →  quiver.predictions   →  quiver.prediction_outcomes          │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  HYPOTHESIS MACHINE                              │
+│                                                                  │
+│  LLM proposes  →  Adversarial critic  →  Backtest validates    │
+│  Lifecycle: candidate → validated → live → retired              │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  PORTFOLIO LAYER                                 │
+│  Sim portfolio (historical backtest)                            │
+│  Paper portfolio (real-time forward test)                       │
+│  Risk controls: position / sector / turnover / drawdown halt    │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              RUNTIME JOBS  (daily, weekly, monthly)              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Cross-cutting concerns:**
+- **LLM model router** — three-tier escalation (local 8B → cloud 70B → frontier) with cost/latency/failure tracking
+- **Reproducibility contract** — every result row carries (code_sha, feature_set_hash, model_run_id)
+- **Data quality findings** — inserted at any layer; can gate predictions
+
+---
+
+## 6. Time Discipline
+
+### 6.1 Five canonical timestamps
+
+| Timestamp | Definition |
+|---|---|
+| `event_at` | When the underlying event happened in the world (e.g., the moment NVDA's CEO answered a question on the call) |
+| `published_at` | When the source claims the information became public (e.g., the SEC filing's accepted_at, the press release's release time) |
+| `available_at` | The earliest time Quiver is permitted to use this information in a historical simulation. This is the load-bearing field. |
+| `ingested_at` | When Quiver fetched it (now-ish for fresh data, archived for backfilled data) |
+| `asof_date` | The prediction date — the simulated "today" of a backtest |
+
+A backtest at `asof_date = D` may use any datum where `available_at ≤ D`. That is the only rule. Lookahead bias is the violation of this rule, and it is the single most common cause of backtest fraud (intentional or not).
+
+### 6.2 `available_at` policy table
+
+This is encoded as a database table, not as code or folklore. Policy versions are auditable.
+
+| Source | available_at = | Rationale |
+|---|---|---|
+| Daily price | `date + 18:00 ET` | Post-close + buffer for adjustments |
+| 10-K filing | `accepted_at + 1 trading day at 09:30 ET` | Filings drop after market close; earliest action is next open |
+| 10-Q filing | Same as 10-K | Same logic |
+| 8-K filing (material) | `accepted_at + 30 minutes` | Material 8-Ks move prices intraday |
+| Earnings call transcript | `call_end_time + 2 hours` (or `fetched_at` if no call_end_time) | Vendor delay typical |
+| Press release (timestamped) | `release_time + 5 minutes` | Wire delivery latency |
+| Press release (date only) | Next trading day at 09:30 ET | Conservative when time unknown |
+| Fundamental fact derived from filing | Inherits filing's `available_at` | Cannot be more recent than its source |
+| FMP profile / static data | `fetched_at` (treat as available immediately) | Reference data, not predictive |
+| Corporate action | `ex_date + 09:30 ET` | Take effect at next open |
+| News (timestamped) | `published_at + 5 minutes` | Aggregator latency |
+| XBRL companyfacts | `filing.accepted_at + 1 trading day` | Same as the underlying filing |
+
+**Policy versioning rule:** Changing any rule above creates a new `available_at_policy_id`. Every fact, feature, and label records the policy version under which its `available_at` was computed. Backtests reference the policy version active at the time of computation.
+
+### 6.3 Replay invariant
+
+```
+For any (asof_date D, code_git_sha S, available_at_policy_version V):
+  re-running the system produces byte-identical predictions to the
+  predictions originally made at D under S and V.
+```
+
+This invariant is the operational definition of reproducibility. Violation is a P0 bug.
+
+---
+
+## 7. Database Schema
+
+All tables in `quiver` schema. Single Postgres instance; database name `quiver`. DDL applied via numbered migrations under `db/migrations/`.
+
+### 7.1 Securities and identifiers
+
+```sql
+CREATE TABLE quiver.securities (
+    id                  bigserial PRIMARY KEY,
+    ticker              text NOT NULL UNIQUE,
+    name                text NOT NULL,
+    cik                 text,
+    exchange            text,
+    asset_class         text NOT NULL DEFAULT 'equity',
+    country             text NOT NULL DEFAULT 'US',
+    currency            text NOT NULL DEFAULT 'USD',
+    fiscal_year_end_md  text,                    -- 'MM-DD'
+    listed_at           date,                    -- IPO / first available
+    delisted_at         date,                    -- NULL = active
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    updated_at          timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE quiver.security_identifiers (
+    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    identifier_type text NOT NULL,           -- ticker, cik, isin, cusip, fmp_symbol
+    identifier      text NOT NULL,
+    valid_from      date NOT NULL,
+    valid_to        date,                    -- NULL = current
+    PRIMARY KEY (security_id, identifier_type, valid_from)
+);
+```
+
+### 7.2 Trading calendar and universe
+
+```sql
+CREATE TABLE quiver.trading_calendar (
+    date            date PRIMARY KEY,
+    is_session      boolean NOT NULL,
+    session_close   timestamptz,
+    is_early_close  boolean NOT NULL DEFAULT false
+);
+
+CREATE TABLE quiver.universe_membership (
+    security_id    bigint NOT NULL REFERENCES quiver.securities(id),
+    universe_name  text NOT NULL,           -- 'falsifier', 'sp500', etc.
+    valid_from     date NOT NULL,
+    valid_to       date,
+    reason         text,
+    PRIMARY KEY (security_id, universe_name, valid_from)
+);
+```
+
+### 7.3 Raw vault
+
+```sql
+CREATE TABLE quiver.raw_objects (
+    id            bigserial PRIMARY KEY,
+    vendor        text NOT NULL,           -- fmp, sec, fred, news_*, etc.
+    endpoint      text NOT NULL,
+    params_hash   text NOT NULL,           -- sha256 of canonical params
+    params        jsonb NOT NULL,
+    request_url   text NOT NULL,           -- secrets stripped
+    http_status   integer NOT NULL,
+    content_type  text,
+    body_jsonb    jsonb,
+    body_raw      bytea,
+    raw_hash      text NOT NULL,           -- sha256 of body
+    fetched_at    timestamptz NOT NULL DEFAULT now()
+);
+```
+
+### 7.4 Time policy
+
+```sql
+CREATE TABLE quiver.available_at_policies (
+    id          bigserial PRIMARY KEY,
+    name        text NOT NULL,             -- e.g., '10K_filing'
+    version     integer NOT NULL,
+    rule        jsonb NOT NULL,            -- structured rule definition
+    valid_from  timestamptz NOT NULL DEFAULT now(),
+    valid_to    timestamptz,               -- NULL = current
+    notes       text,
+    UNIQUE (name, version)
+);
+```
+
+### 7.5 Events and artifacts
+
+```sql
+CREATE TABLE quiver.events (
+    id              bigserial PRIMARY KEY,
+    security_id     bigint REFERENCES quiver.securities(id),
+    event_type      text NOT NULL,         -- earnings_call, 10k, 10q, 8k, news, etc.
+    event_at        timestamptz NOT NULL,
+    published_at    timestamptz NOT NULL,
+    available_at    timestamptz NOT NULL,
+    available_at_policy_id bigint REFERENCES quiver.available_at_policies(id),
+    raw_object_id   bigint REFERENCES quiver.raw_objects(id),
+    summary         text,
+    evidence        jsonb
+);
+
+CREATE TABLE quiver.artifacts (
+    id              bigserial PRIMARY KEY,
+    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    artifact_type   text NOT NULL,         -- transcript, 10k_filing, 10q_filing, news, etc.
+    source          text NOT NULL,
+    period_end      date,
+    published_at    timestamptz NOT NULL,
+    available_at    timestamptz NOT NULL,
+    available_at_policy_id bigint REFERENCES quiver.available_at_policies(id),
+    raw_object_id   bigint REFERENCES quiver.raw_objects(id),
+    content_text    text,
+    raw_hash        text NOT NULL,
+    metadata        jsonb
+);
+
+-- chunked text for FTS / feature extraction
+CREATE TABLE quiver.artifact_chunks (
+    id              bigserial PRIMARY KEY,
+    artifact_id     bigint NOT NULL REFERENCES quiver.artifacts(id),
+    chunk_ordinal   integer NOT NULL,
+    chunk_kind      text NOT NULL,         -- speaker_turn, mda_section, etc.
+    text            text NOT NULL,
+    metadata        jsonb,
+    UNIQUE (artifact_id, chunk_ordinal)
+);
+```
+
+### 7.6 Prices and corporate actions
+
+```sql
+CREATE TABLE quiver.prices_daily (
+    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    date            date NOT NULL,
+    open            numeric(18,6),
+    high            numeric(18,6),
+    low             numeric(18,6),
+    close           numeric(18,6),
+    adj_close       numeric(18,6) NOT NULL,
+    volume          bigint,
+    available_at    timestamptz NOT NULL,
+    raw_object_id   bigint REFERENCES quiver.raw_objects(id),
+    PRIMARY KEY (security_id, date)
+);
+
+CREATE TABLE quiver.corporate_actions (
+    id              bigserial PRIMARY KEY,
+    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    action_type     text NOT NULL,         -- split, dividend, spin, merger
+    ex_date         date NOT NULL,
+    value           numeric(18,6),
+    raw_object_id   bigint REFERENCES quiver.raw_objects(id),
+    UNIQUE (security_id, action_type, ex_date)
+);
+```
+
+### 7.7 Fundamental facts (Quiver-native)
+
+```sql
+CREATE TABLE quiver.fundamental_facts (
+    id                  bigserial PRIMARY KEY,
+    security_id         bigint NOT NULL REFERENCES quiver.securities(id),
+    concept             text NOT NULL,
+    value               numeric NOT NULL,
+    unit                text NOT NULL DEFAULT 'USD',
+    fiscal_year         integer NOT NULL,
+    fiscal_quarter      integer,           -- NULL for annual
+    period_end          date NOT NULL,
+    period_type         text NOT NULL,     -- annual, quarter
+    calendar_year       integer NOT NULL,
+    calendar_quarter    integer,
+    published_at        timestamptz NOT NULL,
+    available_at        timestamptz NOT NULL,
+    available_at_policy_id bigint REFERENCES quiver.available_at_policies(id),
+    raw_object_id       bigint REFERENCES quiver.raw_objects(id),
+    supersedes_id       bigint REFERENCES quiver.fundamental_facts(id),
+    superseded_at       timestamptz,
+    source_system       text NOT NULL,     -- 'fmp', 'sec_xbrl', 'arrow_cache'
+    normalization_version text NOT NULL,
+    notes               text
+);
+
+-- Partial unique: at most one current row per business identity
+CREATE UNIQUE INDEX fundamental_facts_one_current_idx
+    ON quiver.fundamental_facts (
+        security_id, concept, period_end, period_type, normalization_version
+    )
+    WHERE superseded_at IS NULL;
+```
+
+### 7.8 Feature store
+
+```sql
+CREATE TABLE quiver.feature_definitions (
+    id              bigserial PRIMARY KEY,
+    name            text NOT NULL,          -- e.g., 'momentum_12_1'
+    version         integer NOT NULL,       -- version of this feature's logic
+    kind            text NOT NULL,          -- numeric, text
+    computation_spec jsonb NOT NULL,        -- structured: SQL or LLM prompt ref
+    model_version   text,                   -- for text features
+    prompt_version  text,                   -- for text features
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    notes           text,
+    UNIQUE (name, version)
+);
+
+CREATE TABLE quiver.feature_values (
+    id                  bigserial PRIMARY KEY,
+    security_id         bigint NOT NULL REFERENCES quiver.securities(id),
+    asof_date           date NOT NULL,
+    feature_definition_id bigint NOT NULL REFERENCES quiver.feature_definitions(id),
+    value               double precision,   -- NULL = not computable / insufficient data
+    confidence          double precision,   -- for text features
+    source_event_id     bigint REFERENCES quiver.events(id),
+    source_artifact_id  bigint REFERENCES quiver.artifacts(id),
+    computed_at         timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (security_id, asof_date, feature_definition_id)
+);
+
+-- Snapshots: frozen feature value sets for backtest replay
+CREATE TABLE quiver.feature_snapshots (
+    id                  bigserial PRIMARY KEY,
+    name                text NOT NULL,      -- 'falsifier_v1', 'numeric_only', etc.
+    feature_set_hash    text NOT NULL,      -- sha256 of the feature set
+    feature_definition_ids bigint[] NOT NULL,
+    asof_min            date NOT NULL,
+    asof_max            date NOT NULL,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (feature_set_hash)
+);
+```
+
+### 7.9 Labels
+
+```sql
+CREATE TABLE quiver.labels (
+    id              bigserial PRIMARY KEY,
+    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    label_date      date NOT NULL,          -- the prediction-anchor date
+    horizon_days    integer NOT NULL,       -- 5, 30, 90, 365
+    target_kind     text NOT NULL,          -- raw_return, excess_return_market, excess_return_sector
+    value           double precision,       -- NULL = horizon not yet elapsed
+    benchmark_ticker text,                  -- for excess returns
+    computed_at     timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (security_id, label_date, horizon_days, target_kind)
+);
+```
+
+### 7.10 Model registry, backtests, predictions, outcomes
+
+```sql
+CREATE TABLE quiver.model_runs (
+    id                  bigserial PRIMARY KEY,
+    name                text NOT NULL,
+    code_git_sha        text NOT NULL,
+    feature_set_hash    text NOT NULL,
+    feature_snapshot_id bigint REFERENCES quiver.feature_snapshots(id),
+    training_window     daterange NOT NULL,
+    test_window         daterange NOT NULL,
+    hyperparameters     jsonb NOT NULL,
+    random_seed         integer NOT NULL,
+    execution_assumption_id bigint REFERENCES quiver.execution_assumptions(id),
+    available_at_policy_version_set jsonb NOT NULL,  -- map of source -> version
+    started_at          timestamptz NOT NULL DEFAULT now(),
+    finished_at         timestamptz,
+    status              text NOT NULL DEFAULT 'running'  -- running, succeeded, failed
+);
+
+CREATE TABLE quiver.backtest_runs (
+    id                  bigserial PRIMARY KEY,
+    model_run_id        bigint NOT NULL REFERENCES quiver.model_runs(id),
+    hypothesis_id       bigint REFERENCES quiver.hypotheses(id),
+    universe_name       text NOT NULL,
+    horizon_days        integer NOT NULL,
+    target_kind         text NOT NULL,
+    metrics             jsonb NOT NULL,     -- sharpe, ic, hit_rate, max_dd, capacity, ...
+    metrics_by_regime   jsonb NOT NULL,     -- per-regime breakdown
+    label_scramble_pass boolean NOT NULL,   -- did the same model fail on scrambled labels?
+    multiple_comparisons_correction text,   -- 'bh', 'bonferroni', 'none'
+    created_at          timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE quiver.predictions (
+    id                  bigserial PRIMARY KEY,
+    prediction_date     date NOT NULL,
+    security_id         bigint NOT NULL REFERENCES quiver.securities(id),
+    horizon_days        integer NOT NULL,
+    target_kind         text NOT NULL,
+    predicted_value     double precision NOT NULL,
+    confidence          double precision,
+    model_run_id        bigint NOT NULL REFERENCES quiver.model_runs(id),
+    hypothesis_id       bigint REFERENCES quiver.hypotheses(id),
+    feature_snapshot_id bigint REFERENCES quiver.feature_snapshots(id),
+    rationale           jsonb,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (prediction_date, security_id, horizon_days, target_kind, model_run_id)
+);
+
+CREATE TABLE quiver.prediction_outcomes (
+    prediction_id       bigint PRIMARY KEY REFERENCES quiver.predictions(id) ON DELETE CASCADE,
+    realized_value      double precision NOT NULL,
+    error               double precision NOT NULL,  -- predicted - realized
+    label_id            bigint REFERENCES quiver.labels(id),
+    scored_at           timestamptz NOT NULL DEFAULT now()
+);
+```
+
+### 7.11 Hypotheses
+
+```sql
+CREATE TABLE quiver.hypotheses (
+    id              bigserial PRIMARY KEY,
+    name            text NOT NULL UNIQUE,
+    definition      jsonb NOT NULL,         -- structured rule
+    status          text NOT NULL DEFAULT 'candidate',
+                                            -- candidate, validated, live, retired
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    validated_at    timestamptz,
+    activated_at    timestamptz,
+    retired_at      timestamptz,
+    retirement_reason text,
+    proposer        text NOT NULL,          -- 'human', 'llm:claude-sonnet-4-7', etc.
+    critic_verdict  jsonb,                  -- adversarial critic output
+    notes           text
+);
+
+CREATE TABLE quiver.hypothesis_lifecycle_events (
+    id              bigserial PRIMARY KEY,
+    hypothesis_id   bigint NOT NULL REFERENCES quiver.hypotheses(id),
+    event_type      text NOT NULL,          -- proposed, critiqued, validated, promoted, retired
+    actor           text NOT NULL,
+    details         jsonb,
+    occurred_at     timestamptz NOT NULL DEFAULT now()
+);
+```
+
+### 7.12 Portfolios and execution
+
+```sql
+CREATE TABLE quiver.execution_assumptions (
+    id                  bigserial PRIMARY KEY,
+    name                text NOT NULL UNIQUE,
+    spread_bps          numeric NOT NULL,         -- half-spread in bps
+    impact_model        jsonb NOT NULL,           -- e.g., {kind: 'sqrt', coefficient: 0.1}
+    borrow_bps_annual   numeric NOT NULL DEFAULT 25,
+    fill_convention     text NOT NULL,            -- 'next_open', 'eod_close', etc.
+    min_dollar_volume   numeric,                  -- liquidity filter
+    created_at          timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE quiver.portfolios (
+    id              bigserial PRIMARY KEY,
+    name            text NOT NULL UNIQUE,
+    kind            text NOT NULL,           -- 'sim', 'paper', 'live'
+    started_at      timestamptz NOT NULL DEFAULT now(),
+    notes           text
+);
+
+CREATE TABLE quiver.portfolio_positions (
+    portfolio_id    bigint NOT NULL REFERENCES quiver.portfolios(id),
+    asof_date       date NOT NULL,
+    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    weight          double precision NOT NULL,
+    target_holding_days integer,
+    rationale_id    bigint REFERENCES quiver.predictions(id),
+    PRIMARY KEY (portfolio_id, asof_date, security_id)
+);
+
+CREATE TABLE quiver.risk_events (
+    id              bigserial PRIMARY KEY,
+    portfolio_id    bigint REFERENCES quiver.portfolios(id),
+    event_type      text NOT NULL,           -- drawdown_halt, capacity_breach, position_cap_hit, etc.
+    severity        text NOT NULL,           -- info, warning, halt
+    occurred_at     timestamptz NOT NULL DEFAULT now(),
+    details         jsonb,
+    resolved_at     timestamptz
+);
+```
+
+### 7.13 Data quality
+
+```sql
+CREATE TABLE quiver.data_quality_findings (
+    id              bigserial PRIMARY KEY,
+    finding_type    text NOT NULL,
+    severity        text NOT NULL CHECK (severity IN ('info', 'warning', 'error')),
+    security_id     bigint REFERENCES quiver.securities(id),
+    vendor          text,
+    period_start    date,
+    period_end      date,
+    summary         text NOT NULL,
+    evidence        jsonb,
+    blocks_predictions boolean NOT NULL DEFAULT false,
+    discovered_at   timestamptz NOT NULL DEFAULT now(),
+    resolved_at     timestamptz,
+    resolution_note text
+);
+```
+
+---
+
+## 8. Feature Store Contract
+
+### 8.1 Numeric features
+
+Computed deterministically from `prices_daily` + `fundamental_facts` + `corporate_actions`. Pure SQL or pandas. No randomness, no external API calls.
+
+Examples:
+- `momentum_12_1` — return from t-252d to t-21d, excluding most recent 21 days
+- `volatility_30d` — annualized stdev of daily log returns over trailing 30 days
+- `revenue_growth_yoy` — TTM revenue / prior-TTM revenue minus 1
+- `gross_margin_change_yoy` — current TTM gross margin minus prior TTM gross margin
+- `ev_to_revenue_sector_rank` — ratio's sector-relative rank
+- `roic` — NOPAT / average invested capital, computed from facts
+- `sector_relative_momentum` — `momentum_12_1 - sector_median_momentum_12_1`
+
+Versioning: changes in computation logic increment `feature_definitions.version`. Two versions of the same feature can coexist; backtests reference exact `(name, version)` tuple.
+
+### 8.2 Text features
+
+Computed once per artifact via LLM at artifact ingest time. Cached immutably in `feature_values` keyed by `(security_id, asof_date, feature_definition_id)` where `asof_date = artifact.available_at::date`.
+
+Examples (initial set):
+- `management_confidence` — 0.0–1.0 confidence score from earnings call prepared remarks
+- `cfo_hedging_intensity` — count of hedging phrases per 1000 words in CFO segments
+- `forward_guidance_strength` — categorical encoded numerically: 0=none, 1=withdrawn, 2=implicit, 3=explicit_qualitative, 4=explicit_quantitative
+- `risk_factor_yoy_delta` — Jaccard distance of risk-factor section vs prior year
+- `demand_language_shift` — sentiment delta on demand-related sentences quarter-over-quarter
+
+Versioning: changing the LLM model or prompt creates a NEW `feature_definitions` row with a new version. Old feature values remain unchanged. Old backtests remain reproducible.
+
+### 8.3 Feature snapshots
+
+A feature snapshot is a frozen materialization of feature values for a specific feature set across a date range. Used so backtests reference an immutable input — re-running the same backtest pulls the same snapshot.
+
+Snapshot creation: enumerate the feature_definition_ids you want, hash them, write to `feature_snapshots`, then materialize values (pre-computing if needed). Subsequent backtests reference `feature_snapshot_id`.
+
+### 8.4 Feature value invariants
+
+For any `feature_value` row:
+- `asof_date >= source_artifact.available_at::date` (PIT)
+- `asof_date >= source_event.available_at::date` (PIT)
+- The computation is reproducible: given `(security_id, asof_date, feature_definition_id)` and the underlying data at the time of computation, the value is byte-identical.
+
+---
+
+## 9. Labels Contract
+
+### 9.1 Forward returns
+
+For each (security_id, label_date, horizon_days):
+- Find the trading day exactly `horizon_days` after `label_date` (handling weekends, holidays, early closes via `trading_calendar`)
+- Compute log return using split- and dividend-adjusted close prices
+- For excess returns, subtract benchmark log return over the same window
+
+### 9.2 Target kinds
+
+- `raw_return` — security log return over horizon
+- `excess_return_market` — security minus market index (default SPY)
+- `excess_return_sector` — security minus sector ETF (e.g., XLK for tech)
+- `risk_adjusted_return` — `(raw_return - risk_free) / trailing_volatility`
+
+Default prediction target: `excess_return_market`. Predicting raw return reduces to predicting market direction, which is not the goal.
+
+### 9.3 Label availability
+
+Labels are written when their horizon elapses. A 30-day label for `label_date = 2026-04-28` becomes available on or after `2026-06-09`. Predictions made on `2026-04-28` cannot be scored until then. The system explicitly does not score predictions before their labels exist.
+
+---
+
+## 10. Backtest Engine Contract
+
+### 10.1 Inputs
+
+- `feature_snapshot_id` — the frozen feature set
+- `model_definition` — algorithm + hyperparameters (e.g., ridge, gradient-boosted trees, simple z-score ensemble)
+- `training_window` — daterange (typically 252 trading days rolling)
+- `test_window` — daterange (typically 1 trading month rolling)
+- `horizon_days` — prediction horizon
+- `target_kind` — what kind of label
+- `universe_name` — which point-in-time universe
+- `execution_assumption_id` — cost model
+- `random_seed` — for reproducibility
+
+### 10.2 Outputs
+
+A `backtest_run` row with `metrics` jsonb containing:
+
+```json
+{
+  "n_predictions": 12000,
+  "ic_mean": 0.04,
+  "ic_std": 0.18,
+  "ic_t_stat": 2.41,
+  "sharpe_long_short": 0.78,
+  "sharpe_long_only": 0.65,
+  "sharpe_net_of_costs": 0.41,
+  "hit_rate": 0.535,
+  "max_drawdown": -0.12,
+  "drawdown_recovery_days": 87,
+  "turnover_annual": 4.2,
+  "avg_position_count": 8,
+  "capacity_estimate_usd": 25000000,
+  "factor_exposures": {"market": 0.05, "size": -0.12, "value": 0.08, "momentum": 0.31}
+}
+```
+
+Plus `metrics_by_regime`:
+```json
+{
+  "pre_2019": {"sharpe_net": 0.55, "n": 3000},
+  "2020_dislocation": {"sharpe_net": 0.18, "n": 800},
+  "2021_2023_rates": {"sharpe_net": 0.42, "n": 4200},
+  "2024_plus_ai": {"sharpe_net": 0.39, "n": 4000}
+}
+```
+
+### 10.3 Required tests per backtest
+
+Every backtest run must include:
+
+1. **Walk-forward validation** — train on rolling 252-day window, predict 1-month forward, no peeking
+2. **Baseline comparison** — at minimum, compare against random portfolio, equal-weight, and 12-1 momentum
+3. **Net-of-cost reporting** — gross AND net Sharpe; never gross alone
+4. **Regime breakdown** — metrics across 4 regimes minimum (pre-2019, 2020, 2021-23, 2024+)
+5. **Label-scramble test** — same model on permuted labels must produce Sharpe near zero. If it doesn't, the model or harness is broken.
+6. **Multiple-comparisons correction** — when testing N hypotheses, Benjamini-Hochberg at α=0.05 against the family
+
+### 10.4 Cost model (default)
+
+Encoded in `execution_assumptions`. Default values:
+
+- Half-spread: 5 bps for liquid (>$100M ADV), 15 bps for mid (>$10M ADV), 40 bps for small
+- Market impact: square-root model, `impact_bps = 10 × sqrt(trade_value / ADV)` capped at 50 bps
+- Borrow cost on shorts: 25 bps annualized for liquid, higher for hard-to-borrow (manual flag)
+- Fill convention: `next_open` (predictions made at close, executed at next open)
+- Minimum liquidity filter: $10M ADV
+
+### 10.5 Capacity estimate
+
+Computed as: maximum AUM at which the strategy could deploy without market impact eating more than 20% of expected return. Formula:
+```
+capacity = min over all positions of (
+    target_weight × AUM × turnover_implied_share_of_ADV ≤ 0.05 × ADV
+)
+```
+
+A strategy with Sharpe 1.5 and capacity $500K is irrelevant.
+
+---
+
+## 11. AI Layer Contract
+
+### 11.1 The three jobs
+
+The LLM does exactly three things:
+
+1. **Extract structured features from text.** Input: artifact text. Output: numeric feature value + confidence. Versioned by (model_version, prompt_version).
+2. **Propose hypotheses.** Input: recent backtest results, unexplored data corners. Output: structured hypothesis definitions.
+3. **Explain validated results.** Input: a hypothesis that passed validation. Output: prose explanation of why it might work, in service of human understanding. **Post-hoc only.**
+
+### 11.2 What the LLM never does
+
+- Compute returns or any other math
+- Write to `labels`, `predictions`, `outcomes`, or any backtest result table
+- Decide whether a hypothesis is validated (statistics decides)
+- Override risk controls
+- Synthesize features from features (composition is deterministic SQL)
+- Re-validate its own proposals (the adversarial critic is a separate model run)
+
+### 11.3 Model routing
+
+Three tiers, escalation on quality-gate failure:
+
+| Tier | Model class | Use case | Cost (per M output tokens) |
+|---|---|---|---|
+| 1 | Local Llama 3.1 8B (Ollama) | Sentiment, classification, structured extraction | $0 marginal |
+| 2 | Open-source 70B (Together / Groq) | Comparative reasoning, language shift detection | ~$0.88 |
+| 3 | Frontier (Claude Sonnet, GPT-4o) | Hypothesis generation, post-hoc explanation, hard synthesis | ~$15 |
+
+Quality gate between tiers: structured output validates against schema, confidence above threshold, no obvious hallucination patterns. Failure escalates.
+
+### 11.4 Cost / latency budget
+
+- Daily incremental feature extraction (only new artifacts): target <30 min total wall clock at 50-ticker scale, <2 hours at 500-ticker scale
+- Hypothesis generation: weekly batch, <5 min
+- Adversarial critic: per candidate hypothesis, <30 sec
+- Total monthly LLM spend at falsifier scale: <$50
+
+---
+
+## 12. Hypothesis Lifecycle
+
+```
+                     ┌──────────────┐
+   LLM proposes ────►│  candidate   │
+                     └──────┬───────┘
+                            │
+                     adversarial critic
+                            │
+                ┌───────────┴───────────┐
+                │                       │
+                ▼                       ▼
+          ┌──────────┐            ┌──────────┐
+          │  killed  │            │ proceed  │
+          └──────────┘            └─────┬────┘
+                                        │
+                            backtest validation
+                            (walk-forward + regime
+                             + label-scramble +
+                             multiple-comparisons)
+                                        │
+                            ┌───────────┴───────────┐
+                            │                       │
+                            ▼                       ▼
+                      ┌──────────┐           ┌────────────┐
+                      │ rejected │           │ validated  │
+                      └──────────┘           └─────┬──────┘
+                                                   │
+                                       3 months OOS performance
+                                                   │
+                                       ┌───────────┴───────────┐
+                                       │                       │
+                                       ▼                       ▼
+                                 ┌──────────┐           ┌──────────┐
+                                 │  retired │           │   live   │
+                                 └──────────┘           └─────┬────┘
+                                                              │
+                                                  continuous monitoring
+                                                              │
+                                                              ▼
+                                                  drift detection,
+                                                  decay, retire if
+                                                  signal dies
+```
+
+### Promotion gates
+
+**candidate → validated:** all of these must hold:
+- In-sample Sharpe > 0.5
+- Out-of-sample Sharpe > 0.3 over a held-out year
+- Survives label-scramble test (scrambled labels yield near-zero Sharpe)
+- Survives multiple-comparisons correction
+- Adversarial critic finds no PIT violation
+- Capacity > $1M
+- Decay curve doesn't crash to zero in <30 days
+
+**validated → live:** at least 3 months of paper-trading performance consistent with backtest expectation (within 30% of expected Sharpe).
+
+**live → retired:** performance drift exceeds threshold (e.g., 90-day rolling Sharpe < 50% of backtest Sharpe), OR signal IC turns negative, OR capacity falls below threshold.
+
+---
+
+## 13. Portfolio Layer Contract
+
+### 13.1 Sim portfolio (backtest-only)
+
+- Built inside backtest_runs from predictions
+- Trade execution at end-of-period close or next-period open per `execution_assumptions`
+- Costs and impact applied per trade
+- Used to compute Sharpe-net-of-costs, drawdown, capacity
+
+### 13.2 Paper portfolio (forward live)
+
+- Real-time, daily updates
+- Predictions generated at market close → portfolio rebalanced at next open
+- Either internal ledger (synthetic) or broker paper account API (e.g., Alpaca)
+- Tracks: position weights, realized fills, slippage, actual borrow rates
+- Compared monthly against backtest expectation; meaningful drift triggers `risk_event`
+
+### 13.3 Risk controls (default)
+
+- Max single position: 5% of portfolio
+- Max sector exposure: 30%
+- Max gross exposure (long + short): 200% of NAV
+- Max turnover: 500% annualized
+- Liquidity filter: only trade names with >$10M ADV
+- Drawdown halt: if rolling 30-day return < -10%, write `risk_event` and pause new entries
+- Concentration cap: top 10 positions ≤ 50% of portfolio
+
+### 13.4 Capacity gates
+
+If estimated capacity falls below $5M, portfolio enters degraded mode (smaller positions, longer holding periods). If below $1M, halt entirely.
+
+---
+
+## 14. Runtime Jobs
+
+### 14.1 Daily job (post-close, ~1 hour)
+
+1. Ingest new vendor data: prices, news, any filings released today
+2. Apply PIT normalization → events, artifacts, facts
+3. Compute new features for newly-arrived artifacts (numeric + text)
+4. Score open predictions whose horizons elapsed today
+5. Generate today's predictions for all live hypotheses
+6. Update paper portfolio (target positions for next-open execution)
+7. Run risk control checks; emit risk_events if triggered
+8. Write daily report to `reports/daily/YYYY-MM-DD.md`
+
+### 14.2 Weekly job (Monday morning)
+
+1. Evaluate hypothesis drift (live performance vs backtest expectation)
+2. Retire hypotheses below threshold
+3. Adversarial critic reviews live hypotheses
+4. LLM proposes 5–10 new candidate hypotheses
+5. Critic evaluates candidates → kill or proceed
+6. Write weekly report
+
+### 14.3 Monthly job (first Monday)
+
+1. Full backtest rerun with latest data
+2. Compare live performance vs backtest over past month
+3. Promote validated hypotheses to live (if eligible)
+4. Calibration analysis (does 70% confidence call hit 70%?)
+5. Capacity and factor-exposure refresh
+6. Cost / spend analysis: LLM costs, vendor costs
+
+### 14.4 Quarterly job (manual review)
+
+Operator review of:
+- Universe changes (additions, delistings)
+- Available_at policy changes
+- Model selection decisions
+- Whether thesis is still alive
+
+---
+
+## 15. Reproducibility Contract
+
+Every result row carries enough metadata to rebuild it from source:
+
+| Result type | Required metadata |
+|---|---|
+| `fundamental_facts` row | `raw_object_id`, `available_at_policy_id`, `normalization_version` |
+| `feature_values` row | `feature_definition_id` (which encodes `model_version` + `prompt_version`), `source_event_id` or `source_artifact_id`, `computed_at` |
+| `predictions` row | `model_run_id` (which encodes `code_git_sha`, `feature_set_hash`, `training_window`, `random_seed`, `execution_assumption_id`, `available_at_policy_version_set`) |
+| `backtest_runs` row | All of the above plus `universe_name` and computed metrics |
+
+Replay procedure:
+1. Check out `code_git_sha`
+2. Apply `available_at_policy_version_set`
+3. Materialize features from `feature_snapshot_id`
+4. Train with `random_seed` over `training_window`
+5. Predict over `test_window`
+6. Verify byte-identical predictions
+
+---
+
+## 16. Repository Structure
+
+```
+~/Quiver/
+├── README.md                       (mission, invariants, contributing)
+├── SPEC.md                         (this document)
+├── pyproject.toml
+├── .env.example
+├── .gitignore
+│
+├── config/
+│   ├── universe.yaml               (initial ticker list, tier definitions)
+│   ├── available_at_policies.yaml  (default policy versions)
+│   ├── execution_assumptions.yaml  (cost models)
+│   └── llm_router.yaml             (model tier assignments)
+│
+├── db/
+│   ├── migrations/
+│   │   ├── 001_foundation.sql
+│   │   ├── 002_normalization.sql
+│   │   ├── 003_features_and_labels.sql
+│   │   ├── 004_models_and_predictions.sql
+│   │   ├── 005_portfolios.sql
+│   │   └── 006_hypotheses.sql
+│   └── seed/
+│       ├── trading_calendar.csv    (10y of NYSE calendar)
+│       └── universe_seed.yaml
+│
+├── src/quiver/
+│   ├── __init__.py
+│   ├── time/                       (asof_date utilities, calendar, available_at)
+│   ├── data/                       (db connection, query helpers)
+│   ├── ingest/                     (FMP, SEC, news clients + raw vault)
+│   ├── normalize/                  (raw → events, artifacts, facts, prices)
+│   ├── features/
+│   │   ├── numeric/
+│   │   ├── text/                   (LLM-driven feature extractors)
+│   │   └── store.py
+│   ├── labels/                     (forward return computation)
+│   ├── models/                     (algorithm wrappers: ridge, gbt, etc.)
+│   ├── backtest/
+│   │   ├── walk_forward.py
+│   │   ├── costs.py
+│   │   ├── regimes.py
+│   │   └── tests.py                (label-scramble, multiple-comparisons)
+│   ├── hypotheses/
+│   │   ├── generator.py            (LLM-based)
+│   │   ├── critic.py               (adversarial review)
+│   │   ├── validator.py            (backtest gate)
+│   │   └── lifecycle.py
+│   ├── portfolio/
+│   │   ├── construct.py
+│   │   ├── execute_sim.py
+│   │   ├── execute_paper.py
+│   │   └── risk_controls.py
+│   ├── llm/
+│   │   ├── router.py
+│   │   ├── prompts/                (versioned prompt files)
+│   │   └── providers/              (anthropic, together, ollama)
+│   ├── runtime/
+│   │   ├── daily.py
+│   │   ├── weekly.py
+│   │   └── monthly.py
+│   └── reports/                    (daily/weekly/monthly markdown generators)
+│
+├── scripts/
+│   ├── apply_migrations.py
+│   ├── seed_universe.py
+│   ├── ingest_prices.py
+│   ├── ingest_fundamentals.py
+│   ├── ingest_transcripts.py
+│   ├── ingest_filings.py
+│   ├── compute_features.py
+│   ├── run_backtest.py
+│   ├── run_falsifier.py
+│   └── run_daily.py
+│
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── fixtures/                   (small reproducible data fixtures)
+│
+└── reports/                        (generated artifacts, gitignored beyond samples)
+    ├── daily/
+    ├── weekly/
+    ├── monthly/
+    └── falsifier/
+```
+
+---
+
+## 17. Build Plan
+
+### Phase 1 — Foundation (1.5 weeks)
+
+**Goal:** Quiver can persist data with full PIT discipline and reproduce a known anomaly on a tiny universe.
+
+Deliverables:
+- Migration `001_foundation.sql` applied
+- Trading calendar seeded for 2014–2026
+- 5 initial securities (NVDA, MSFT, AAPL, GOOGL, JPM) seeded
+- Universe `falsifier_seed` populated
+- `available_at_policies` table populated with initial policy versions
+- FMP + SEC clients with rate limits
+- Raw vault writer with idempotent storage
+- Prices ingested for 5 tickers × 10 years
+- Forward labels computed
+- Walk-forward harness runnable
+- **12-1 momentum anomaly reproduced on 5 tickers × 10 years with positive Sharpe**
+
+**Phase 1 exit criterion:** A `pytest tests/integration/test_momentum_replication.py` passes, asserting that 12-1 momentum has Sharpe > 0.2 on the 5-ticker / 10-year universe under realistic costs.
+
+### Phase 2 — Trustworthy backtest infrastructure (1.5 weeks)
+
+**Goal:** Every backtest result is reproducible, regime-broken, label-scramble-tested, and net-of-costs.
+
+Deliverables:
+- Migration `002_normalization.sql` and `003_features_and_labels.sql` applied
+- `model_runs` and `backtest_runs` tables with full metadata
+- Cost model implementation (`execution_assumptions`)
+- Regime split logic
+- Label-scramble test
+- Multiple-comparisons correction
+- Capacity / drawdown / factor-exposure metrics
+- Reproducibility test: run same backtest twice → identical `backtest_run` metrics
+
+**Phase 2 exit criterion:** A backtest can be reproduced byte-identically from its `model_run_id` alone.
+
+### Phase 3 — Numeric features and baseline models (1 week)
+
+**Goal:** A numeric-only model produces meaningful Sharpe and serves as the bar AI must beat.
+
+Deliverables:
+- 12–15 deterministic numeric features
+- 5 baseline models scored on the falsifier universe
+- Numeric ensemble model (linear regression of all numeric features)
+- Per-feature backtest reports
+- Feature snapshot infrastructure
+
+**Phase 3 exit criterion:** Numeric ensemble reports a stable, positive net-of-costs Sharpe across regimes on the falsifier universe; results survive label-scramble.
+
+### Phase 4 — AI text features (2 weeks)
+
+**Goal:** First 5–10 AI-extracted text features, computed immutably with full versioning.
+
+Deliverables:
+- LLM model router with three tiers
+- Versioned prompt files
+- Transcript ingest pipeline
+- Filing ingest pipeline
+- 5–10 text feature extractors
+- Bulk computation over historical artifacts
+- Feature values populated for falsifier universe
+
+**Phase 4 exit criterion:** Text features computable end-to-end; running the same extractor twice produces identical values.
+
+### Phase 5 — The falsifier verdict (3 days)
+
+**Goal:** Definitive answer: do AI text features improve over numeric-only?
+
+Deliverables:
+- Numeric-only ensemble vs numeric+text ensemble backtest
+- Multiple-comparisons-corrected significance test
+- Per-regime breakdown
+- Adversarial critic review of any positive result
+- One reproducible report at `reports/falsifier/v1.md`
+
+**Phase 5 decision rule:**
+- Numeric+text ensemble Sharpe > numeric ensemble Sharpe by ≥ 0.2 net of costs, surviving correction → thesis lives, proceed to Phase 6
+- No improvement → thesis fails at this scale; document and either iterate text features or abandon
+
+### Phase 6 — Predictions, paper portfolio, outcomes (1 week)
+
+**Goal:** Live operational system that makes daily predictions and scores them.
+
+Deliverables:
+- Daily prediction generation for live hypotheses
+- Paper portfolio (internal ledger first; broker integration optional)
+- Outcome scoring as labels become available
+- Daily report generator
+- Risk controls operational
+
+**Phase 6 exit criterion:** Daily job runs unattended for 1 week, producing daily reports and updating paper portfolio.
+
+### Phase 7 — Hypothesis machine (1 week)
+
+**Goal:** AI proposes hypotheses, critic attacks, backtest decides; lifecycle automated.
+
+Deliverables:
+- Hypothesis generator (LLM-based)
+- Adversarial critic
+- Validator (full backtest gate)
+- Lifecycle state machine
+- Weekly job operational
+
+**Phase 7 exit criterion:** Weekly job autonomously proposes, critiques, validates, and either kills or promotes hypotheses. At least 1 candidate survives the full pipeline (or gets correctly killed).
+
+### Total timeline
+
+~10 weeks to phase 7 complete.
+~7 weeks to falsifier verdict (phase 5).
+
+If Phase 5 fails, the system is still useful: a clean numeric quant infrastructure with PIT discipline. Iteration on text features can continue.
+
+---
+
+## 18. First Milestone (Week 1 Deliverable)
+
+The most concrete possible week-1 target:
+
+**Day 1–2:**
+- Repo bootstrap, virtualenv, pyproject
+- Migration 001 applied
+- 5 securities seeded
+- 10y NYSE calendar seeded
+
+**Day 3–4:**
+- FMP client built and tested
+- Prices ingested for 5 tickers × 10 years (~12,500 rows)
+- Forward labels computed at 5/30/90/365-day horizons (~50,000 rows)
+
+**Day 5:**
+- Walk-forward backtest harness skeleton
+- 12-1 momentum feature computed
+- One backtest run completed end-to-end with model_run_id and metrics
+
+**Day 6–7:**
+- Cost model applied
+- Multiple regimes split out
+- Label-scramble test passing
+- First report at `reports/falsifier/week_1_momentum.md`
+- Test suite green
+
+**Week 1 success:** A repeatable command `python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 30 --universe falsifier_seed` produces a complete backtest report whose Sharpe is reproducible across runs and consistent with academic literature on 12-1 momentum.
+
+---
+
+## 19. Open Decisions Before Phase 1
+
+These need answers before phase 1 begins. None of them block reading this spec.
+
+| Decision | Default recommendation |
+|---|---|
+| Postgres only or Postgres + DuckDB hybrid? | Postgres only for v1. Add DuckDB at phase 5+ if feature-store queries get slow. |
+| Survivorship-bias source | Accept current-S&P universe for falsifier; document as known limitation; revisit before scaling beyond 50 tickers. |
+| Trading calendar source | `pandas_market_calendars` library |
+| Initial benchmark for excess returns | SPY (market) and XLK/XLF/etc. (sector) |
+| Local LLM stack | Ollama for ease; switch to vLLM if throughput becomes a bottleneck |
+| Frontier LLM provider | Claude Sonnet via Anthropic API |
+| Mid-tier LLM provider | Together AI for Llama 70B |
+| News vendor | Skip until phase 2+ |
+| Broker paper account | Internal ledger first; consider Alpaca for phase 6 if paper feel matters |
+
+---
+
+## 20. Risk Register
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| PIT violation creates lookahead bias | Medium | Catastrophic (invalidates all results) | Encoded `available_at` policy table; specific tests assert PIT discipline; adversarial critic looks for violations |
+| Feature versioning breaks reproducibility | Medium | High | Immutable feature values keyed by feature_definition version; prompt/model versions recorded explicitly |
+| Backtest overfits via multiple comparisons | High | High | Benjamini-Hochberg correction; out-of-sample holdout; label-scramble required |
+| AI text features look great in backtest, fail live | Medium | Medium | 3-month paper validation required before live; drift monitoring continuous |
+| LLM cost runs away | Low | Medium | Model router prefers cheap tiers; daily incremental only on new artifacts; monthly cost ceiling |
+| Vendor data gaps create silent holes | Medium | Medium | `data_quality_findings` writes; predictions can be blocked on gaps; weekly review |
+| Survivorship bias inflates backtest performance | High at scale | High | Documented for falsifier (40 tickers); must address before universe expansion |
+| Regime change kills validated hypothesis | Medium | Medium | Per-regime metrics in every backtest; live drift monitoring; auto-retirement |
+| Capacity invisible at scale | Medium | High | Capacity estimate in every backtest; capacity gates in portfolio; halt below threshold |
+| Code drift breaks reproducibility | Low | Catastrophic | Every result tagged with code_git_sha; replay procedure documented |
+
+---
+
+## 21. Out of Scope (Restated)
+
+- Live capital deployment of any size
+- Reinforcement learning
+- Options, futures, fixed income, foreign equities, crypto
+- Intraday signals
+- Real-time market microstructure
+- Multi-user collaboration / sharing
+- Web UI before phase 6
+- Manual analyst override workflows
+- Macro factor models beyond manual era splits
+- Sector rotation strategies (initially)
+- ESG signals
+- Alternative data (satellite, web traffic, credit card spend)
+
+These can become scope in a v2 if the v1 thesis survives.
+
+---
+
+## 22. Bottom Line
+
+Quiver is a falsification machine for one thesis: AI-extracted text features improve forward-return prediction in US equities net of costs. It is built native, reproducible, and adversarially tested from day one. The first ten weeks produce a verdict; the system is engineered to admit "no edge" as a valid outcome.
+
+Build accordingly.
+
+---
+
+*This document is the canonical spec. Save as `~/Quiver/SPEC.md`. Subsequent build phases reference its sections by number. Changes to the spec require a versioned amendment with rationale.*

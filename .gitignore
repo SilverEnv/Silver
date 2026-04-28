@@ -1,0 +1,40 @@
+.DS_Store
+
+# Secrets and local machine config
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local databases and generated data
+*.db
+*.sqlite
+*.sqlite3
+data/raw/
+data/vendor/
+
+# Symphony / agent runtime output
+.symphony/
+silver-agent-workspaces/
+log/
+*.log
+
+# Generated reports. Keep directories and docs, not run output.
+reports/**/*.md
+!reports/**/README.md
+!reports/**/.gitkeep
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
