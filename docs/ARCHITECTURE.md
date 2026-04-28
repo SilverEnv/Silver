@@ -43,10 +43,27 @@ scripts.
 
 Numbered SQL migrations live under `db/migrations/`. Run
 `python scripts/apply_migrations.py --check` to validate migration order and
-static schema expectations without a live database. To apply migrations to a
-clean local Postgres database, set `DATABASE_URL` and run
-`python scripts/apply_migrations.py`; the apply path records checksums in
-`silver.schema_migrations` and requires the `psql` client.
+static schema expectations without a live database.
+
+For a clean local Postgres database, prefer the single bootstrap command:
+
+```bash
+python scripts/bootstrap_database.py --check
+DATABASE_URL=postgresql://... python scripts/bootstrap_database.py
+```
+
+The bootstrap order is deterministic:
+
+1. `scripts/apply_migrations.py`
+2. `scripts/seed_available_at_policies.py`
+3. `scripts/seed_reference_data.py`
+4. `scripts/seed_trading_calendar.py`
+
+`--check` runs each step's no-database validation path. Apply mode requires
+`DATABASE_URL` or `--database-url`, fails fast on the first failing step, and
+uses the existing individual migration and seed scripts unchanged. The
+migration apply path records checksums in `silver.schema_migrations` and
+requires the `psql` client.
 
 ## External Data Boundary
 
