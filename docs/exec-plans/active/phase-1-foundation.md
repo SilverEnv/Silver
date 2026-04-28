@@ -21,7 +21,7 @@ signal on the seed universe.
 - [ ] Trading calendar is seeded for 2014-2026
 - [ ] Seed universe contains NVDA, MSFT, AAPL, GOOGL, and JPM
 - [ ] Prices can be ingested for the seed universe
-- [ ] Labels are computed for 5, 30, 90, and 365 trading-day horizons
+- [ ] Labels are computed for 5, 21, 63, 126, and 252 trading-day horizons
 - [ ] Momentum 12-1 feature is computed without lookahead
 - [ ] Backtest includes costs, baselines, regimes, and label-scramble
 - [ ] Report is written to `reports/falsifier/week_1_momentum.md`
@@ -30,7 +30,7 @@ signal on the seed universe.
 
 - [ ] `git diff --check`
 - [ ] `python -m pytest`
-- [ ] `python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 30 --universe falsifier_seed`
+- [ ] `python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 63 --universe falsifier_seed`
 
 ## Suggested Ticket Breakdown
 

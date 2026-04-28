@@ -11,7 +11,7 @@ Run the narrowest meaningful check while iterating, then broaden before handoff.
 git diff --check
 python -m pytest
 ruff check .
-python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 30 --universe falsifier_seed
+python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 63 --universe falsifier_seed
 ```
 
 Not all commands exist at repository bootstrap. If a command does not exist yet,
@@ -32,7 +32,7 @@ the seed universe with realistic costs and emits a report.
 Target command:
 
 ```bash
-python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 30 --universe falsifier_seed
+python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 63 --universe falsifier_seed
 ```
 
 The integration test should assert positive net Sharpe for the tiny seed

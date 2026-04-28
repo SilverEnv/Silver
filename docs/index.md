@@ -7,6 +7,8 @@ and humans building Silver.
 
 - [`../SPEC.md`](../SPEC.md): product contract and build phases
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): repository structure and layer rules
+- [`AI_NATIVE_SILVER.md`](AI_NATIVE_SILVER.md): conceptual model for Silver as
+  an AI-native investment learning environment
 - [`PIT_DISCIPLINE.md`](PIT_DISCIPLINE.md): time, `available_at`, and lookahead
   rules
 - [`TESTING.md`](TESTING.md): validation ladder and phase gates

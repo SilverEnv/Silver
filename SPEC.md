@@ -27,7 +27,7 @@ If the thesis fails, Silver should fail it cleanly and report the failure. The s
 **In scope:**
 - US-listed common equities and ADRs trading on NYSE / Nasdaq / NYSE-Arca / NYSE-American
 - Daily-frequency observations
-- Forward-return horizons of 5, 30, 90, and 365 trading days
+- Forward-return horizons of 5, 21, 63, 126, and 252 trading days
 - Initial universe of ~40–50 tickers for falsifier; expand to ~500 if falsifier survives
 - Numeric features (deterministic from prices + fundamentals)
 - Text features (LLM-extracted from transcripts, filings, news)
@@ -152,7 +152,7 @@ Anything not in this list is a feature of one of these objects, not a primitive.
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                          LABELS                                  │
-│  Forward returns at 5/30/90/365 days; raw and excess           │
+│  Forward returns at 5/21/63/126/252 trading days; raw/excess   │
 │  Computed deterministically from prices + corporate_actions     │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
@@ -485,7 +485,7 @@ CREATE TABLE silver.labels (
     id              bigserial PRIMARY KEY,
     security_id     bigint NOT NULL REFERENCES silver.securities(id),
     label_date      date NOT NULL,          -- the prediction-anchor date
-    horizon_days    integer NOT NULL,       -- 5, 30, 90, 365
+    horizon_days    integer NOT NULL,       -- 5, 21, 63, 126, 252
     target_kind     text NOT NULL,          -- raw_return, excess_return_market, excess_return_sector
     value           double precision,       -- NULL = horizon not yet elapsed
     benchmark_ticker text,                  -- for excess returns
@@ -712,7 +712,11 @@ Default prediction target: `excess_return_market`. Predicting raw return reduces
 
 ### 9.3 Label availability
 
-Labels are written when their horizon elapses. A 30-day label for `label_date = 2026-04-28` becomes available on or after `2026-06-09`. Predictions made on `2026-04-28` cannot be scored until then. The system explicitly does not score predictions before their labels exist.
+Labels are written when their horizon elapses. A 63-trading-day label for
+`label_date = 2026-04-28` becomes available only after the 63rd later trading
+day has an adjusted close price. Predictions made on `2026-04-28` cannot be
+scored until then. The system explicitly does not score predictions before
+their labels exist.
 
 ---
 
@@ -1213,7 +1217,7 @@ The most concrete possible week-1 target:
 **Day 3–4:**
 - FMP client built and tested
 - Prices ingested for 5 tickers × 10 years (~12,500 rows)
-- Forward labels computed at 5/30/90/365-day horizons (~50,000 rows)
+- Forward labels computed at 5/21/63/126/252-trading-day horizons
 
 **Day 5:**
 - Walk-forward backtest harness skeleton
@@ -1227,7 +1231,7 @@ The most concrete possible week-1 target:
 - First report at `reports/falsifier/week_1_momentum.md`
 - Test suite green
 
-**Week 1 success:** A repeatable command `python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 30 --universe falsifier_seed` produces a complete backtest report whose Sharpe is reproducible across runs and consistent with academic literature on 12-1 momentum.
+**Week 1 success:** A repeatable command `python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 63 --universe falsifier_seed` produces a complete backtest report whose Sharpe is reproducible across runs and consistent with academic literature on 12-1 momentum.
 
 ---
 
