@@ -1,5 +1,18 @@
-"""Backtest planning and runner primitives."""
+"""Backtest planning, runner, and falsifier primitives."""
 
+from silver.backtest.momentum_falsifier import (
+    DEFAULT_MIN_TRAIN_SESSIONS,
+    DEFAULT_ROUND_TRIP_COST_BPS,
+    DEFAULT_STEP_SESSIONS,
+    DEFAULT_TEST_SESSIONS,
+    MomentumBacktestRow,
+    MomentumDateResult,
+    MomentumFalsifierInputError,
+    MomentumFalsifierResult,
+    MomentumHeadlineMetrics,
+    MomentumWindowResult,
+    run_momentum_falsifier,
+)
 from silver.backtest.momentum_runner import (
     BacktestSampleCounts,
     BaselineComparison,
@@ -23,6 +36,10 @@ from silver.backtest.walk_forward import (
 )
 
 __all__ = [
+    "DEFAULT_MIN_TRAIN_SESSIONS",
+    "DEFAULT_ROUND_TRIP_COST_BPS",
+    "DEFAULT_STEP_SESSIONS",
+    "DEFAULT_TEST_SESSIONS",
     "BacktestSampleCounts",
     "BaselineComparison",
     "LinearMomentumModel",
@@ -30,7 +47,13 @@ __all__ = [
     "MomentumBacktestError",
     "MomentumBacktestPrediction",
     "MomentumBacktestResult",
+    "MomentumBacktestRow",
     "MomentumBacktestSplitResult",
+    "MomentumDateResult",
+    "MomentumFalsifierInputError",
+    "MomentumFalsifierResult",
+    "MomentumHeadlineMetrics",
+    "MomentumWindowResult",
     "PersistedForwardReturnLabel",
     "PersistedMomentumFeatureValue",
     "PredictiveMetrics",
@@ -40,4 +63,5 @@ __all__ = [
     "WalkForwardSplit",
     "plan_walk_forward_splits",
     "run_momentum_12_1_backtest",
+    "run_momentum_falsifier",
 ]
