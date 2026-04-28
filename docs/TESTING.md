@@ -1,6 +1,6 @@
 # Testing And Validation
 
-Quiver values falsification over optimistic backtests. Tests should make false
+Silver values falsification over optimistic backtests. Tests should make false
 confidence hard.
 
 ## Validation Ladder

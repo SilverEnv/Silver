@@ -1,8 +1,8 @@
-# Silver / Quiver
+# Silver
 
-Silver is the repository for Quiver: a point-in-time prediction and backtesting
-system for testing whether AI-extracted text features improve US equity forward
-return prediction over numeric baselines, net of costs.
+Silver is a point-in-time prediction and backtesting system for testing whether
+AI-extracted text features improve US equity forward return prediction over
+numeric baselines, net of costs.
 
 The product contract is [`SPEC.md`](SPEC.md). The agent harness is intentionally
 small: [`AGENTS.md`](AGENTS.md) is the map, and `docs/` is the system of record.

@@ -1,6 +1,6 @@
 # Phase 1 Foundation Plan
 
-Goal: Quiver can persist point-in-time data and reproduce a simple 12-1 momentum
+Goal: Silver can persist point-in-time data and reproduce a simple 12-1 momentum
 signal on the seed universe.
 
 ## Scope

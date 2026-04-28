@@ -21,7 +21,7 @@ Silver is prepared to be run by the local Symphony checkout at
 
 If the Linear project changes, edit [`../WORKFLOW.md`](../WORKFLOW.md):
 
-- Set `tracker.project_slug` to the new Silver/Quiver Linear project slug.
+- Set `tracker.project_slug` to the new Silver Linear project slug.
 - Keep `agent.max_concurrent_agents` low at first (`1` or `2`).
 - Keep the workspace root outside this repository.
 

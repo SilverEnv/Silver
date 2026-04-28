@@ -32,8 +32,8 @@ codex:
     type: workspaceWrite
 ---
 
-You are working on Linear ticket `{{ issue.identifier }}` for the Silver /
-Quiver repository.
+You are working on Linear ticket `{{ issue.identifier }}` for the Silver
+repository.
 
 {% if attempt %}
 Continuation context:
@@ -91,7 +91,7 @@ No description provided.
 9. Move to `In Review` only after acceptance criteria and validation are
    complete or a true external blocker is documented.
 
-## Quiver-Specific Quality Bar
+## Silver-Specific Quality Bar
 
 - Point-in-time correctness is mandatory.
 - Backtest claims require costs, baselines, and reproducibility metadata.

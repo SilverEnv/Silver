@@ -1,14 +1,14 @@
-# Quiver — Build Specification v1.0
+# Silver — Build Specification v1.0
 
-> *"For each security, on each as-of date: what was knowable, what features existed, what did Quiver predict, what portfolio would it hold, and what happened?"*
+> *"For each security, on each as-of date: what was knowable, what features existed, what did Silver predict, what portfolio would it hold, and what happened?"*
 
 ---
 
 ## 1. Mission
 
-Quiver is a point-in-time prediction and backtesting system for US equity forward returns. Its purpose is to determine, with rigor and reproducibility, whether modern AI-extracted signals can predict stock returns net of trading costs better than well-known numeric baselines.
+Silver is a point-in-time prediction and backtesting system for US equity forward returns. Its purpose is to determine, with rigor and reproducibility, whether modern AI-extracted signals can predict stock returns net of trading costs better than well-known numeric baselines.
 
-Quiver is not a research dashboard, an analyst chatbot, a valuation engine, or a portfolio reporting tool. It is a falsification machine for one investment thesis.
+Silver is not a research dashboard, an analyst chatbot, a valuation engine, or a portfolio reporting tool. It is a falsification machine for one investment thesis.
 
 **The thesis being tested:**
 
@@ -18,7 +18,7 @@ Quiver is not a research dashboard, an analyst chatbot, a valuation engine, or a
 
 > AI-derived text features improve out-of-sample, net-of-cost prediction over numeric-only baselines, and survive label-scramble tests, multiple-comparisons correction, and adversarial review.
 
-If the thesis fails, Quiver should fail it cleanly and report the failure. The system is engineered to admit "no edge" as a valid output.
+If the thesis fails, Silver should fail it cleanly and report the failure. The system is engineered to admit "no edge" as a valid output.
 
 ---
 
@@ -76,12 +76,12 @@ Violation of any law invalidates downstream claims. The system refuses to write 
 
 ## 4. Native Objects
 
-The world Quiver models:
+The world Silver models:
 
 | Object | Definition |
 |---|---|
 | **Security** | A tradable equity instrument (ticker + identifier history) |
-| **Universe** | A point-in-time set of securities Quiver considers eligible |
+| **Universe** | A point-in-time set of securities Silver considers eligible |
 | **Trading calendar** | Days the US equity market is open, including early closes |
 | **Event** | Something newly observable about a security (earnings call, 8-K, news item) |
 | **Artifact** | Source material attached to an event (transcript text, 10-K HTML, news article body) |
@@ -116,13 +116,13 @@ Anything not in this list is a feature of one of these objects, not a primitive.
 ┌─────────────────────────────────────────────────────────────────┐
 │                    INGEST LAYER (clients + raw vault)           │
 │  • FMP client  • SEC client  • Polite HTTP w/ rate limit       │
-│  • RawVault    →  quiver.raw_objects (immutable, hashed)       │
+│  • RawVault    →  silver.raw_objects (immutable, hashed)       │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              POINT-IN-TIME NORMALIZATION LAYER                   │
-│  Source adapters convert raw objects to Quiver-native rows.      │
+│  Source adapters convert raw objects to Silver-native rows.      │
 │  available_at policy applied per source.                         │
 │                                                                  │
 │  →  events  →  artifacts  →  fundamental_facts                  │
@@ -145,8 +145,8 @@ Anything not in this list is a feature of one of these objects, not a primitive.
 │  │                        │    │   prompt_version)      │       │
 │  └────────────────────────┘    └────────────────────────┘       │
 │                          ↓                                       │
-│            quiver.feature_values (versioned, PIT)               │
-│            quiver.feature_snapshots (frozen for replay)         │
+│            silver.feature_values (versioned, PIT)               │
+│            silver.feature_snapshots (frozen for replay)         │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
                           ▼
@@ -164,8 +164,8 @@ Anything not in this list is a feature of one of these objects, not a primitive.
 │  Multiple-comparisons correction  •  Capacity estimates         │
 │  Drawdown / factor-exposure metrics                             │
 │                                                                  │
-│  →  quiver.backtest_runs  →  quiver.model_runs                  │
-│  →  quiver.predictions   →  quiver.prediction_outcomes          │
+│  →  silver.backtest_runs  →  silver.model_runs                  │
+│  →  silver.predictions   →  silver.prediction_outcomes          │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
                           ▼
@@ -205,8 +205,8 @@ Anything not in this list is a feature of one of these objects, not a primitive.
 |---|---|
 | `event_at` | When the underlying event happened in the world (e.g., the moment NVDA's CEO answered a question on the call) |
 | `published_at` | When the source claims the information became public (e.g., the SEC filing's accepted_at, the press release's release time) |
-| `available_at` | The earliest time Quiver is permitted to use this information in a historical simulation. This is the load-bearing field. |
-| `ingested_at` | When Quiver fetched it (now-ish for fresh data, archived for backfilled data) |
+| `available_at` | The earliest time Silver is permitted to use this information in a historical simulation. This is the load-bearing field. |
+| `ingested_at` | When Silver fetched it (now-ish for fresh data, archived for backfilled data) |
 | `asof_date` | The prediction date — the simulated "today" of a backtest |
 
 A backtest at `asof_date = D` may use any datum where `available_at ≤ D`. That is the only rule. Lookahead bias is the violation of this rule, and it is the single most common cause of backtest fraud (intentional or not).
@@ -246,12 +246,12 @@ This invariant is the operational definition of reproducibility. Violation is a 
 
 ## 7. Database Schema
 
-All tables in `quiver` schema. Single Postgres instance; database name `quiver`. DDL applied via numbered migrations under `db/migrations/`.
+All tables in `silver` schema. Single Postgres instance; database name `silver`. DDL applied via numbered migrations under `db/migrations/`.
 
 ### 7.1 Securities and identifiers
 
 ```sql
-CREATE TABLE quiver.securities (
+CREATE TABLE silver.securities (
     id                  bigserial PRIMARY KEY,
     ticker              text NOT NULL UNIQUE,
     name                text NOT NULL,
@@ -267,8 +267,8 @@ CREATE TABLE quiver.securities (
     updated_at          timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE quiver.security_identifiers (
-    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+CREATE TABLE silver.security_identifiers (
+    security_id     bigint NOT NULL REFERENCES silver.securities(id),
     identifier_type text NOT NULL,           -- ticker, cik, isin, cusip, fmp_symbol
     identifier      text NOT NULL,
     valid_from      date NOT NULL,
@@ -280,15 +280,15 @@ CREATE TABLE quiver.security_identifiers (
 ### 7.2 Trading calendar and universe
 
 ```sql
-CREATE TABLE quiver.trading_calendar (
+CREATE TABLE silver.trading_calendar (
     date            date PRIMARY KEY,
     is_session      boolean NOT NULL,
     session_close   timestamptz,
     is_early_close  boolean NOT NULL DEFAULT false
 );
 
-CREATE TABLE quiver.universe_membership (
-    security_id    bigint NOT NULL REFERENCES quiver.securities(id),
+CREATE TABLE silver.universe_membership (
+    security_id    bigint NOT NULL REFERENCES silver.securities(id),
     universe_name  text NOT NULL,           -- 'falsifier', 'sp500', etc.
     valid_from     date NOT NULL,
     valid_to       date,
@@ -300,7 +300,7 @@ CREATE TABLE quiver.universe_membership (
 ### 7.3 Raw vault
 
 ```sql
-CREATE TABLE quiver.raw_objects (
+CREATE TABLE silver.raw_objects (
     id            bigserial PRIMARY KEY,
     vendor        text NOT NULL,           -- fmp, sec, fred, news_*, etc.
     endpoint      text NOT NULL,
@@ -319,7 +319,7 @@ CREATE TABLE quiver.raw_objects (
 ### 7.4 Time policy
 
 ```sql
-CREATE TABLE quiver.available_at_policies (
+CREATE TABLE silver.available_at_policies (
     id          bigserial PRIMARY KEY,
     name        text NOT NULL,             -- e.g., '10K_filing'
     version     integer NOT NULL,
@@ -334,38 +334,38 @@ CREATE TABLE quiver.available_at_policies (
 ### 7.5 Events and artifacts
 
 ```sql
-CREATE TABLE quiver.events (
+CREATE TABLE silver.events (
     id              bigserial PRIMARY KEY,
-    security_id     bigint REFERENCES quiver.securities(id),
+    security_id     bigint REFERENCES silver.securities(id),
     event_type      text NOT NULL,         -- earnings_call, 10k, 10q, 8k, news, etc.
     event_at        timestamptz NOT NULL,
     published_at    timestamptz NOT NULL,
     available_at    timestamptz NOT NULL,
-    available_at_policy_id bigint REFERENCES quiver.available_at_policies(id),
-    raw_object_id   bigint REFERENCES quiver.raw_objects(id),
+    available_at_policy_id bigint REFERENCES silver.available_at_policies(id),
+    raw_object_id   bigint REFERENCES silver.raw_objects(id),
     summary         text,
     evidence        jsonb
 );
 
-CREATE TABLE quiver.artifacts (
+CREATE TABLE silver.artifacts (
     id              bigserial PRIMARY KEY,
-    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    security_id     bigint NOT NULL REFERENCES silver.securities(id),
     artifact_type   text NOT NULL,         -- transcript, 10k_filing, 10q_filing, news, etc.
     source          text NOT NULL,
     period_end      date,
     published_at    timestamptz NOT NULL,
     available_at    timestamptz NOT NULL,
-    available_at_policy_id bigint REFERENCES quiver.available_at_policies(id),
-    raw_object_id   bigint REFERENCES quiver.raw_objects(id),
+    available_at_policy_id bigint REFERENCES silver.available_at_policies(id),
+    raw_object_id   bigint REFERENCES silver.raw_objects(id),
     content_text    text,
     raw_hash        text NOT NULL,
     metadata        jsonb
 );
 
 -- chunked text for FTS / feature extraction
-CREATE TABLE quiver.artifact_chunks (
+CREATE TABLE silver.artifact_chunks (
     id              bigserial PRIMARY KEY,
-    artifact_id     bigint NOT NULL REFERENCES quiver.artifacts(id),
+    artifact_id     bigint NOT NULL REFERENCES silver.artifacts(id),
     chunk_ordinal   integer NOT NULL,
     chunk_kind      text NOT NULL,         -- speaker_turn, mda_section, etc.
     text            text NOT NULL,
@@ -377,8 +377,8 @@ CREATE TABLE quiver.artifact_chunks (
 ### 7.6 Prices and corporate actions
 
 ```sql
-CREATE TABLE quiver.prices_daily (
-    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+CREATE TABLE silver.prices_daily (
+    security_id     bigint NOT NULL REFERENCES silver.securities(id),
     date            date NOT NULL,
     open            numeric(18,6),
     high            numeric(18,6),
@@ -387,27 +387,27 @@ CREATE TABLE quiver.prices_daily (
     adj_close       numeric(18,6) NOT NULL,
     volume          bigint,
     available_at    timestamptz NOT NULL,
-    raw_object_id   bigint REFERENCES quiver.raw_objects(id),
+    raw_object_id   bigint REFERENCES silver.raw_objects(id),
     PRIMARY KEY (security_id, date)
 );
 
-CREATE TABLE quiver.corporate_actions (
+CREATE TABLE silver.corporate_actions (
     id              bigserial PRIMARY KEY,
-    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    security_id     bigint NOT NULL REFERENCES silver.securities(id),
     action_type     text NOT NULL,         -- split, dividend, spin, merger
     ex_date         date NOT NULL,
     value           numeric(18,6),
-    raw_object_id   bigint REFERENCES quiver.raw_objects(id),
+    raw_object_id   bigint REFERENCES silver.raw_objects(id),
     UNIQUE (security_id, action_type, ex_date)
 );
 ```
 
-### 7.7 Fundamental facts (Quiver-native)
+### 7.7 Fundamental facts (Silver-native)
 
 ```sql
-CREATE TABLE quiver.fundamental_facts (
+CREATE TABLE silver.fundamental_facts (
     id                  bigserial PRIMARY KEY,
-    security_id         bigint NOT NULL REFERENCES quiver.securities(id),
+    security_id         bigint NOT NULL REFERENCES silver.securities(id),
     concept             text NOT NULL,
     value               numeric NOT NULL,
     unit                text NOT NULL DEFAULT 'USD',
@@ -419,9 +419,9 @@ CREATE TABLE quiver.fundamental_facts (
     calendar_quarter    integer,
     published_at        timestamptz NOT NULL,
     available_at        timestamptz NOT NULL,
-    available_at_policy_id bigint REFERENCES quiver.available_at_policies(id),
-    raw_object_id       bigint REFERENCES quiver.raw_objects(id),
-    supersedes_id       bigint REFERENCES quiver.fundamental_facts(id),
+    available_at_policy_id bigint REFERENCES silver.available_at_policies(id),
+    raw_object_id       bigint REFERENCES silver.raw_objects(id),
+    supersedes_id       bigint REFERENCES silver.fundamental_facts(id),
     superseded_at       timestamptz,
     source_system       text NOT NULL,     -- 'fmp', 'sec_xbrl', 'arrow_cache'
     normalization_version text NOT NULL,
@@ -430,7 +430,7 @@ CREATE TABLE quiver.fundamental_facts (
 
 -- Partial unique: at most one current row per business identity
 CREATE UNIQUE INDEX fundamental_facts_one_current_idx
-    ON quiver.fundamental_facts (
+    ON silver.fundamental_facts (
         security_id, concept, period_end, period_type, normalization_version
     )
     WHERE superseded_at IS NULL;
@@ -439,7 +439,7 @@ CREATE UNIQUE INDEX fundamental_facts_one_current_idx
 ### 7.8 Feature store
 
 ```sql
-CREATE TABLE quiver.feature_definitions (
+CREATE TABLE silver.feature_definitions (
     id              bigserial PRIMARY KEY,
     name            text NOT NULL,          -- e.g., 'momentum_12_1'
     version         integer NOT NULL,       -- version of this feature's logic
@@ -452,21 +452,21 @@ CREATE TABLE quiver.feature_definitions (
     UNIQUE (name, version)
 );
 
-CREATE TABLE quiver.feature_values (
+CREATE TABLE silver.feature_values (
     id                  bigserial PRIMARY KEY,
-    security_id         bigint NOT NULL REFERENCES quiver.securities(id),
+    security_id         bigint NOT NULL REFERENCES silver.securities(id),
     asof_date           date NOT NULL,
-    feature_definition_id bigint NOT NULL REFERENCES quiver.feature_definitions(id),
+    feature_definition_id bigint NOT NULL REFERENCES silver.feature_definitions(id),
     value               double precision,   -- NULL = not computable / insufficient data
     confidence          double precision,   -- for text features
-    source_event_id     bigint REFERENCES quiver.events(id),
-    source_artifact_id  bigint REFERENCES quiver.artifacts(id),
+    source_event_id     bigint REFERENCES silver.events(id),
+    source_artifact_id  bigint REFERENCES silver.artifacts(id),
     computed_at         timestamptz NOT NULL DEFAULT now(),
     UNIQUE (security_id, asof_date, feature_definition_id)
 );
 
 -- Snapshots: frozen feature value sets for backtest replay
-CREATE TABLE quiver.feature_snapshots (
+CREATE TABLE silver.feature_snapshots (
     id                  bigserial PRIMARY KEY,
     name                text NOT NULL,      -- 'falsifier_v1', 'numeric_only', etc.
     feature_set_hash    text NOT NULL,      -- sha256 of the feature set
@@ -481,9 +481,9 @@ CREATE TABLE quiver.feature_snapshots (
 ### 7.9 Labels
 
 ```sql
-CREATE TABLE quiver.labels (
+CREATE TABLE silver.labels (
     id              bigserial PRIMARY KEY,
-    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    security_id     bigint NOT NULL REFERENCES silver.securities(id),
     label_date      date NOT NULL,          -- the prediction-anchor date
     horizon_days    integer NOT NULL,       -- 5, 30, 90, 365
     target_kind     text NOT NULL,          -- raw_return, excess_return_market, excess_return_sector
@@ -497,27 +497,27 @@ CREATE TABLE quiver.labels (
 ### 7.10 Model registry, backtests, predictions, outcomes
 
 ```sql
-CREATE TABLE quiver.model_runs (
+CREATE TABLE silver.model_runs (
     id                  bigserial PRIMARY KEY,
     name                text NOT NULL,
     code_git_sha        text NOT NULL,
     feature_set_hash    text NOT NULL,
-    feature_snapshot_id bigint REFERENCES quiver.feature_snapshots(id),
+    feature_snapshot_id bigint REFERENCES silver.feature_snapshots(id),
     training_window     daterange NOT NULL,
     test_window         daterange NOT NULL,
     hyperparameters     jsonb NOT NULL,
     random_seed         integer NOT NULL,
-    execution_assumption_id bigint REFERENCES quiver.execution_assumptions(id),
+    execution_assumption_id bigint REFERENCES silver.execution_assumptions(id),
     available_at_policy_version_set jsonb NOT NULL,  -- map of source -> version
     started_at          timestamptz NOT NULL DEFAULT now(),
     finished_at         timestamptz,
     status              text NOT NULL DEFAULT 'running'  -- running, succeeded, failed
 );
 
-CREATE TABLE quiver.backtest_runs (
+CREATE TABLE silver.backtest_runs (
     id                  bigserial PRIMARY KEY,
-    model_run_id        bigint NOT NULL REFERENCES quiver.model_runs(id),
-    hypothesis_id       bigint REFERENCES quiver.hypotheses(id),
+    model_run_id        bigint NOT NULL REFERENCES silver.model_runs(id),
+    hypothesis_id       bigint REFERENCES silver.hypotheses(id),
     universe_name       text NOT NULL,
     horizon_days        integer NOT NULL,
     target_kind         text NOT NULL,
@@ -528,27 +528,27 @@ CREATE TABLE quiver.backtest_runs (
     created_at          timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE quiver.predictions (
+CREATE TABLE silver.predictions (
     id                  bigserial PRIMARY KEY,
     prediction_date     date NOT NULL,
-    security_id         bigint NOT NULL REFERENCES quiver.securities(id),
+    security_id         bigint NOT NULL REFERENCES silver.securities(id),
     horizon_days        integer NOT NULL,
     target_kind         text NOT NULL,
     predicted_value     double precision NOT NULL,
     confidence          double precision,
-    model_run_id        bigint NOT NULL REFERENCES quiver.model_runs(id),
-    hypothesis_id       bigint REFERENCES quiver.hypotheses(id),
-    feature_snapshot_id bigint REFERENCES quiver.feature_snapshots(id),
+    model_run_id        bigint NOT NULL REFERENCES silver.model_runs(id),
+    hypothesis_id       bigint REFERENCES silver.hypotheses(id),
+    feature_snapshot_id bigint REFERENCES silver.feature_snapshots(id),
     rationale           jsonb,
     created_at          timestamptz NOT NULL DEFAULT now(),
     UNIQUE (prediction_date, security_id, horizon_days, target_kind, model_run_id)
 );
 
-CREATE TABLE quiver.prediction_outcomes (
-    prediction_id       bigint PRIMARY KEY REFERENCES quiver.predictions(id) ON DELETE CASCADE,
+CREATE TABLE silver.prediction_outcomes (
+    prediction_id       bigint PRIMARY KEY REFERENCES silver.predictions(id) ON DELETE CASCADE,
     realized_value      double precision NOT NULL,
     error               double precision NOT NULL,  -- predicted - realized
-    label_id            bigint REFERENCES quiver.labels(id),
+    label_id            bigint REFERENCES silver.labels(id),
     scored_at           timestamptz NOT NULL DEFAULT now()
 );
 ```
@@ -556,7 +556,7 @@ CREATE TABLE quiver.prediction_outcomes (
 ### 7.11 Hypotheses
 
 ```sql
-CREATE TABLE quiver.hypotheses (
+CREATE TABLE silver.hypotheses (
     id              bigserial PRIMARY KEY,
     name            text NOT NULL UNIQUE,
     definition      jsonb NOT NULL,         -- structured rule
@@ -572,9 +572,9 @@ CREATE TABLE quiver.hypotheses (
     notes           text
 );
 
-CREATE TABLE quiver.hypothesis_lifecycle_events (
+CREATE TABLE silver.hypothesis_lifecycle_events (
     id              bigserial PRIMARY KEY,
-    hypothesis_id   bigint NOT NULL REFERENCES quiver.hypotheses(id),
+    hypothesis_id   bigint NOT NULL REFERENCES silver.hypotheses(id),
     event_type      text NOT NULL,          -- proposed, critiqued, validated, promoted, retired
     actor           text NOT NULL,
     details         jsonb,
@@ -585,7 +585,7 @@ CREATE TABLE quiver.hypothesis_lifecycle_events (
 ### 7.12 Portfolios and execution
 
 ```sql
-CREATE TABLE quiver.execution_assumptions (
+CREATE TABLE silver.execution_assumptions (
     id                  bigserial PRIMARY KEY,
     name                text NOT NULL UNIQUE,
     spread_bps          numeric NOT NULL,         -- half-spread in bps
@@ -596,7 +596,7 @@ CREATE TABLE quiver.execution_assumptions (
     created_at          timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE quiver.portfolios (
+CREATE TABLE silver.portfolios (
     id              bigserial PRIMARY KEY,
     name            text NOT NULL UNIQUE,
     kind            text NOT NULL,           -- 'sim', 'paper', 'live'
@@ -604,19 +604,19 @@ CREATE TABLE quiver.portfolios (
     notes           text
 );
 
-CREATE TABLE quiver.portfolio_positions (
-    portfolio_id    bigint NOT NULL REFERENCES quiver.portfolios(id),
+CREATE TABLE silver.portfolio_positions (
+    portfolio_id    bigint NOT NULL REFERENCES silver.portfolios(id),
     asof_date       date NOT NULL,
-    security_id     bigint NOT NULL REFERENCES quiver.securities(id),
+    security_id     bigint NOT NULL REFERENCES silver.securities(id),
     weight          double precision NOT NULL,
     target_holding_days integer,
-    rationale_id    bigint REFERENCES quiver.predictions(id),
+    rationale_id    bigint REFERENCES silver.predictions(id),
     PRIMARY KEY (portfolio_id, asof_date, security_id)
 );
 
-CREATE TABLE quiver.risk_events (
+CREATE TABLE silver.risk_events (
     id              bigserial PRIMARY KEY,
-    portfolio_id    bigint REFERENCES quiver.portfolios(id),
+    portfolio_id    bigint REFERENCES silver.portfolios(id),
     event_type      text NOT NULL,           -- drawdown_halt, capacity_breach, position_cap_hit, etc.
     severity        text NOT NULL,           -- info, warning, halt
     occurred_at     timestamptz NOT NULL DEFAULT now(),
@@ -628,11 +628,11 @@ CREATE TABLE quiver.risk_events (
 ### 7.13 Data quality
 
 ```sql
-CREATE TABLE quiver.data_quality_findings (
+CREATE TABLE silver.data_quality_findings (
     id              bigserial PRIMARY KEY,
     finding_type    text NOT NULL,
     severity        text NOT NULL CHECK (severity IN ('info', 'warning', 'error')),
-    security_id     bigint REFERENCES quiver.securities(id),
+    security_id     bigint REFERENCES silver.securities(id),
     vendor          text,
     period_start    date,
     period_end      date,
@@ -997,7 +997,7 @@ Replay procedure:
 ## 16. Repository Structure
 
 ```
-~/Quiver/
+~/Silver/
 ├── README.md                       (mission, invariants, contributing)
 ├── SPEC.md                         (this document)
 ├── pyproject.toml
@@ -1022,7 +1022,7 @@ Replay procedure:
 │       ├── trading_calendar.csv    (10y of NYSE calendar)
 │       └── universe_seed.yaml
 │
-├── src/quiver/
+├── src/silver/
 │   ├── __init__.py
 │   ├── time/                       (asof_date utilities, calendar, available_at)
 │   ├── data/                       (db connection, query helpers)
@@ -1089,7 +1089,7 @@ Replay procedure:
 
 ### Phase 1 — Foundation (1.5 weeks)
 
-**Goal:** Quiver can persist data with full PIT discipline and reproduce a known anomaly on a tiny universe.
+**Goal:** Silver can persist data with full PIT discipline and reproduce a known anomaly on a tiny universe.
 
 Deliverables:
 - Migration `001_foundation.sql` applied
@@ -1287,10 +1287,10 @@ These can become scope in a v2 if the v1 thesis survives.
 
 ## 22. Bottom Line
 
-Quiver is a falsification machine for one thesis: AI-extracted text features improve forward-return prediction in US equities net of costs. It is built native, reproducible, and adversarially tested from day one. The first ten weeks produce a verdict; the system is engineered to admit "no edge" as a valid outcome.
+Silver is a falsification machine for one thesis: AI-extracted text features improve forward-return prediction in US equities net of costs. It is built native, reproducible, and adversarially tested from day one. The first ten weeks produce a verdict; the system is engineered to admit "no edge" as a valid outcome.
 
 Build accordingly.
 
 ---
 
-*This document is the canonical spec. Save as `~/Quiver/SPEC.md`. Subsequent build phases reference its sections by number. Changes to the spec require a versioned amendment with rationale.*
+*This document is the canonical spec. Save as `~/Silver/SPEC.md`. Subsequent build phases reference its sections by number. Changes to the spec require a versioned amendment with rationale.*

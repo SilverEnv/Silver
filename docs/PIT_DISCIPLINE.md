@@ -1,14 +1,14 @@
 # Point-In-Time Discipline
 
-Point-in-time discipline is the core safety property of Quiver. If this breaks,
+Point-in-time discipline is the core safety property of Silver. If this breaks,
 the research result is invalid.
 
 ## Canonical Timestamps
 
 - `event_at`: when the underlying event happened
 - `published_at`: when the source says the information became public
-- `available_at`: earliest time Quiver may use the datum in simulation
-- `ingested_at`: when Quiver fetched the datum
+- `available_at`: earliest time Silver may use the datum in simulation
+- `ingested_at`: when Silver fetched the datum
 - `asof_date`: simulated prediction date
 
 A backtest at `asof_date = D` may use only data with `available_at <= D`.

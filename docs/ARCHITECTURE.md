@@ -1,6 +1,6 @@
 # Architecture
 
-Quiver is a layered point-in-time research system. The target structure is in
+Silver is a layered point-in-time research system. The target structure is in
 `SPEC.md`; this file turns it into working rules for agents.
 
 ## Layer Order
@@ -25,7 +25,7 @@ backtest code, and feature code must not read prediction outcomes.
 config/
 db/migrations/
 db/seed/
-src/quiver/
+src/silver/
 scripts/
 tests/
 reports/
@@ -36,7 +36,7 @@ empty systems just to mirror the final spec.
 
 ## Database Boundary
 
-All application tables live in the `quiver` Postgres schema. Migrations are the
+All application tables live in the `silver` Postgres schema. Migrations are the
 source of truth for table shape. Python code should use typed helper functions
 or repository-local query helpers rather than ad hoc SQL scattered across
 scripts.

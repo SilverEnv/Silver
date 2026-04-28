@@ -1,7 +1,7 @@
 # Silver Documentation Index
 
 `AGENTS.md` is the short map. This directory is the system of record for agents
-and humans building Quiver.
+and humans building Silver.
 
 ## Core Docs
 
