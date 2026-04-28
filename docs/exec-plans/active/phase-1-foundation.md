@@ -35,6 +35,7 @@ signal on the seed universe.
 - [x] `python scripts/seed_reference_data.py --check`
 - [x] `python scripts/seed_trading_calendar.py --check`
 - [x] `python scripts/apply_migrations.py --check`
+- [x] `python scripts/materialize_forward_labels.py --check`
 - [x] `python -m pytest`
 - [x] `ruff check .`
 - [x] `python scripts/run_falsifier.py --check`
@@ -84,3 +85,8 @@ businesses remain out of scope; no REIT is in the seed universe.
 Keep Phase 1 narrow. Text features, hypothesis generation, paper trading, and
 portfolio execution are intentionally deferred until the falsifier harness is
 honest.
+
+ARR-24 added the first in-memory walk-forward `momentum_12_1` runner with
+point-in-time label availability checks, transaction-cost assumptions, and a
+numeric momentum-rank baseline. The final falsifier report command,
+label-scramble test, and full regime breakdown remain separate follow-up work.

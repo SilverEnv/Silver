@@ -1,4 +1,4 @@
-"""Backtest planning and thin falsifier primitives."""
+"""Backtest planning, runner, and falsifier primitives."""
 
 from silver.backtest.momentum_falsifier import (
     DEFAULT_MIN_TRAIN_SESSIONS,
@@ -13,6 +13,21 @@ from silver.backtest.momentum_falsifier import (
     MomentumWindowResult,
     run_momentum_falsifier,
 )
+from silver.backtest.momentum_runner import (
+    BacktestSampleCounts,
+    BaselineComparison,
+    LinearMomentumModel,
+    MomentumBacktestConfig,
+    MomentumBacktestError,
+    MomentumBacktestPrediction,
+    MomentumBacktestResult,
+    MomentumBacktestSplitResult,
+    PersistedForwardReturnLabel,
+    PersistedMomentumFeatureValue,
+    PredictiveMetrics,
+    TransactionCostConfig,
+    run_momentum_12_1_backtest,
+)
 from silver.backtest.walk_forward import (
     WalkForwardConfig,
     WalkForwardConfigError,
@@ -25,15 +40,28 @@ __all__ = [
     "DEFAULT_ROUND_TRIP_COST_BPS",
     "DEFAULT_STEP_SESSIONS",
     "DEFAULT_TEST_SESSIONS",
+    "BacktestSampleCounts",
+    "BaselineComparison",
+    "LinearMomentumModel",
+    "MomentumBacktestConfig",
+    "MomentumBacktestError",
+    "MomentumBacktestPrediction",
+    "MomentumBacktestResult",
     "MomentumBacktestRow",
+    "MomentumBacktestSplitResult",
     "MomentumDateResult",
     "MomentumFalsifierInputError",
     "MomentumFalsifierResult",
     "MomentumHeadlineMetrics",
     "MomentumWindowResult",
+    "PersistedForwardReturnLabel",
+    "PersistedMomentumFeatureValue",
+    "PredictiveMetrics",
+    "TransactionCostConfig",
     "WalkForwardConfig",
     "WalkForwardConfigError",
     "WalkForwardSplit",
     "plan_walk_forward_splits",
+    "run_momentum_12_1_backtest",
     "run_momentum_falsifier",
 ]
