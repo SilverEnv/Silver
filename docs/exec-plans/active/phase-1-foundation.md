@@ -68,3 +68,8 @@ businesses remain out of scope; no REIT is in the seed universe.
 Keep Phase 1 narrow. Text features, hypothesis generation, paper trading, and
 portfolio execution are intentionally deferred until the falsifier harness is
 honest.
+
+ARR-24 added the first in-memory walk-forward `momentum_12_1` runner with
+point-in-time label availability checks, transaction-cost assumptions, and a
+numeric momentum-rank baseline. The final falsifier report command,
+label-scramble test, and full regime breakdown remain separate follow-up work.
