@@ -1,16 +1,12 @@
 ---
 tracker:
   kind: linear
-  project_slug: "silver"
+  project_slug: "silver-6bb30c3143d2"
   active_states:
     - Todo
     - In Progress
-    - Rework
-    - Merging
   terminal_states:
     - Done
-    - Closed
-    - Cancelled
     - Canceled
     - Duplicate
 polling:
@@ -77,10 +73,10 @@ No description provided.
 - `Backlog`: do not modify; stop.
 - `Todo`: move to `In Progress`, create or refresh the workpad, then execute.
 - `In Progress`: continue execution from the workpad.
-- `Human Review`: wait for review; do not code unless moved to `Rework`.
-- `Rework`: re-read issue and review comments, refresh the plan, then fix.
-- `Merging`: land only after checks and review state are clear.
+- `In Review`: wait for human review; do not code.
 - `Done`: terminal; stop.
+- `Canceled`: terminal; stop.
+- `Duplicate`: terminal; stop.
 
 ## Execution Checklist
 
@@ -92,7 +88,7 @@ No description provided.
 6. Run targeted validation, then broader available validation.
 7. Commit cleanly.
 8. Push a branch and open/update a pull request when GitHub access is available.
-9. Move to `Human Review` only after acceptance criteria and validation are
+9. Move to `In Review` only after acceptance criteria and validation are
    complete or a true external blocker is documented.
 
 ## Quiver-Specific Quality Bar

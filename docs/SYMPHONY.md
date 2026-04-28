@@ -13,25 +13,53 @@ Silver is prepared to be run by the local Symphony checkout at
 
 ## Configure
 
-Edit [`../WORKFLOW.md`](../WORKFLOW.md):
+[`../WORKFLOW.md`](../WORKFLOW.md) is wired to the Linear project:
 
-- Set `tracker.project_slug` to the Silver/Quiver Linear project slug.
+- Project: Silver
+- URL: `https://linear.app/zilent/project/silver-6bb30c3143d2`
+- Slug: `silver-6bb30c3143d2`
+
+If the Linear project changes, edit [`../WORKFLOW.md`](../WORKFLOW.md):
+
+- Set `tracker.project_slug` to the new Silver/Quiver Linear project slug.
 - Keep `agent.max_concurrent_agents` low at first (`1` or `2`).
 - Keep the workspace root outside this repository.
 
 ## Run
 
-From the Symphony implementation:
+The current local run is managed by `tmux` session `silver-symphony` so it can
+stay alive independently of a shell.
+
+Start or restart it with:
 
 ```bash
-cd /Users/michael/symphony/elixir
-export LINEAR_API_KEY=...
-mise exec -- ./bin/symphony /Users/michael/Silver/WORKFLOW.md \
-  --logs-root /Users/michael/Silver/.symphony/log \
-  --port 4007
+tmux kill-session -t silver-symphony 2>/dev/null || true
+tmux new-session -d -s silver-symphony '
+  set -a
+  source /Users/michael/Silver/.env
+  set +a
+  cd /Users/michael/symphony/elixir
+  mise exec -- ./bin/symphony /Users/michael/Silver/WORKFLOW.md \
+    --logs-root /Users/michael/Silver/.symphony/log \
+    --port 4007 \
+    --i-understand-that-this-will-be-running-without-the-usual-guardrails
+'
 ```
 
 The dashboard is available at `http://localhost:4007` when `--port` is set.
+
+Inspect:
+
+```bash
+tmux capture-pane -pt silver-symphony -S -80
+curl -fsS http://127.0.0.1:4007/api/v1/state
+```
+
+Stop:
+
+```bash
+tmux kill-session -t silver-symphony
+```
 
 ## First Tickets
 
