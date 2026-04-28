@@ -28,10 +28,13 @@ signal on the seed universe.
 - [ ] Backtest includes costs, baselines, regimes, and label-scramble
 - [x] Falsifier report command writes to
   `reports/falsifier/week_1_momentum.md`
+- [x] Phase 1 pipeline command runs bootstrap, price ingest, labels, momentum
+  features, and report generation in deterministic order
 
 ## Validation
 
 - [x] `git diff --check`
+- [x] `python scripts/run_phase1_pipeline.py --check`
 - [x] `python scripts/seed_reference_data.py --check`
 - [x] `python scripts/seed_trading_calendar.py --check`
 - [x] `python scripts/apply_migrations.py --check`
@@ -42,6 +45,20 @@ signal on the seed universe.
 - [x] `python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 63 --universe falsifier_seed` (command exists; live run requires persisted feature and label prerequisites)
 
 ## Falsifier Command
+
+Validate the full Phase 1 pipeline wiring without live database writes or FMP
+calls:
+
+```bash
+python scripts/run_phase1_pipeline.py --check
+```
+
+Run the full Phase 1 pipeline after `DATABASE_URL` and `FMP_API_KEY` are set and
+`psql` is on `PATH`:
+
+```bash
+python scripts/run_phase1_pipeline.py --universe falsifier_seed --horizon 63
+```
 
 Validate CLI/config/report-path wiring without live data:
 
