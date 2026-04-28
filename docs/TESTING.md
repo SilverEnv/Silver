@@ -9,6 +9,7 @@ Run the narrowest meaningful check while iterating, then broaden before handoff.
 
 ```bash
 git diff --check
+python scripts/check_falsifier_inputs.py --check
 python -m pytest
 ruff check .
 python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 63 --universe falsifier_seed
@@ -37,6 +38,7 @@ python scripts/seed_available_at_policies.py --check
 python scripts/seed_reference_data.py --check
 python scripts/seed_trading_calendar.py --check
 python scripts/materialize_momentum_12_1.py --check
+python scripts/check_falsifier_inputs.py --check
 python -m pytest
 ruff check .
 ```
