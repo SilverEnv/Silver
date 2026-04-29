@@ -264,6 +264,44 @@ def test_routine_docs_and_tests_still_queue() -> None:
     assert "green" in decision.reason
 
 
+def test_negative_secret_checklist_text_does_not_trigger_safety_review() -> None:
+    issue = _issue("ARR-48")
+    pr = _pr(
+        42,
+        title="ARR-48 Tighten merge steward PR matching",
+        changed_files=_changed_files("scripts/merge_steward.py"),
+        body="- [x] Does not commit secrets or local data",
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "queue"
+    assert "green" in decision.reason
+
+
+def test_affirmative_secret_metadata_triggers_safety_review() -> None:
+    issue = _issue("ARR-49")
+    pr = _pr(
+        49,
+        title="ARR-49 Update credential handling",
+        changed_files=_changed_files("README.md"),
+        body="Store API token material for integration tests.",
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "move_safety_review"
+    assert "secret handling" in decision.reason
+
+
 def test_mechanical_steward_fixes_still_queue() -> None:
     issue = _issue("ARR-42")
     pr = _pr(
@@ -492,6 +530,43 @@ def test_choose_pr_prefers_open_highest_number_match() -> None:
 
     assert pr is not None
     assert pr.number == 30
+
+
+def test_choose_pr_ignores_identifier_mentions_in_proof_body() -> None:
+    issue = _issue("ARR-41", state="Backlog")
+    pull_requests = (
+        _pr(
+            41,
+            title="ARR-47 Add admission steward for Objective-driven Todo admission",
+            head_ref_name="codex/admission-steward",
+            body=(
+                "Live dry-run decisions:\n"
+                "ARR-41 | promote | Backlog | approved Objective\n"
+                "ARR-42 | promote | Backlog | approved Objective\n"
+            ),
+            state="MERGED",
+            merged_at="2026-04-29T12:51:06Z",
+        ),
+    )
+
+    pr = merge_steward.choose_pr_for_issue(issue, pull_requests)
+
+    assert pr is None
+
+
+def test_choose_pr_does_not_match_identifier_prefix() -> None:
+    issue = _issue("ARR-4")
+    pull_requests = (
+        _pr(
+            41,
+            title="ARR-41 Add admission steward",
+            head_ref_name="arr-41-admission-steward",
+        ),
+    )
+
+    pr = merge_steward.choose_pr_for_issue(issue, pull_requests)
+
+    assert pr is None
 
 
 def test_parse_github_repo_handles_https_and_ssh_remotes() -> None:
