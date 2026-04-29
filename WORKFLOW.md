@@ -75,8 +75,9 @@ No description provided.
 - `Todo`: move to `In Progress`, create or refresh the workpad, then execute.
 - `In Progress`: continue execution from the workpad.
 - `Rework`: resume from review feedback, repair the existing PR, refresh the
-  proof packet, then move back to `Human Review`.
-- `Human Review`: wait for human review; do not code.
+  proof packet, then move back to `Merging` when safe.
+- `Safety Review`: wait for Michael because the ticket hit a serious safety or
+  semantic exception; do not code.
 - `Merging`: wait for the lightweight merge steward; do not start a Codex
   worker from Symphony for this state.
 - `Done`: terminal; stop.
@@ -94,12 +95,13 @@ No description provided.
 7. Commit cleanly.
 8. Push a branch and open/update a pull request when GitHub access is available.
 9. Post a proof packet to Linear.
-10. Move to `Human Review` only after acceptance criteria and validation are
-    complete or a true external blocker is documented.
+10. Move safe completed work to `Merging` after acceptance criteria and
+    validation are complete. Move only serious safety or semantic exceptions to
+    `Safety Review`.
 
 ## Proof Packet
 
-Before moving a ticket to `Human Review`, post a Linear comment headed
+Before moving a safe completed ticket to `Merging`, post a Linear comment headed
 `## Proof Packet` with:
 
 - PR link.
@@ -112,12 +114,30 @@ Before moving a ticket to `Human Review`, post a Linear comment headed
 - CI status or link if available.
 - Risks, assumptions, and known gaps.
 - Generated artifact path or link when the ticket creates an artifact.
-- Exact blocker if the work cannot be completed.
+- Exact blocker if the work cannot be completed or must go to `Safety Review`.
 
-Do not move to `Human Review` with only a prose claim. The packet must give
-Michael enough evidence to approve, reject, or move the issue to `Rework`.
+Do not move to `Merging` with only a prose claim. The packet must give the
+merge steward and Michael enough evidence to audit, repair, or stop the work.
 Keep the technical detail, but make the Objective Impact understandable to
 Michael as a user of the build system.
+
+## Safety Review Gate
+
+Moving a ticket to `Todo` is approval to build and merge only within the
+ticket's stated scope. Stop in `Safety Review` instead of `Merging` when the
+work requires judgment about:
+
+- data deletion or destructive migration
+- point-in-time rule changes
+- feature, label, or backtest metric semantics
+- secret or credential handling
+- new paid or live external service behavior
+- ticket scope drift
+- automation permission expansion
+- ambiguous schema meaning
+
+Routine stale branches, mechanical merge conflicts, formatting conflicts, and
+failed checks with clear fixes should go through `Rework`, not `Safety Review`.
 
 ## Merge Steward Rules
 

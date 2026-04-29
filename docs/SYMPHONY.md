@@ -33,8 +33,8 @@ If the Linear project changes, edit [`../WORKFLOW.md`](../WORKFLOW.md):
 - Keep `agent.max_concurrent_agents` at a level Michael can review; current
   operating target is `5`.
 - Keep the workspace root outside this repository.
-- Keep `Human Review` as a non-active Linear state so completed PRs stop being
-  picked up by Symphony while they wait for Michael's review.
+- Keep `Safety Review` as a non-active Linear state for catastrophic or
+  semantic exceptions that require Michael.
 - Keep `Merging` as a non-active Linear state. It is handled by the lightweight
   merge steward script instead of a full Codex worker.
 
@@ -47,22 +47,23 @@ Silver uses Linear as the Symphony control plane:
 | `Backlog` | No | Planned work; do not start. |
 | `Todo` | Yes | Ready for an agent to start. |
 | `In Progress` | Yes | Agent is implementing the ticket. |
-| `Rework` | Yes | Human or CI requested changes; agent should repair the PR. |
-| `Human Review` | No | Agent has posted a proof packet and is waiting for Michael. |
-| `Merging` | No | Michael approved; lightweight merge steward queues/marks done. |
+| `Rework` | Yes | CI, steward, or mechanical conflict repair requested; agent should repair the PR. |
+| `Safety Review` | No | Serious safety or semantic exception requiring Michael. |
+| `Merging` | No | Safe completed work; lightweight merge steward queues/marks done. |
 | `Done` | No | Complete. |
 | `Canceled` / `Duplicate` | No | Terminal non-work states. |
 
 The key rule is that agents do not mark their own implementation work `Done`.
-They move implementation tickets to `Human Review` with evidence. Michael moves
-approved tickets to `Merging`; the lightweight merge steward handles GitHub
-merge queue and marks the issue `Done` after the PR lands. Only conflicts or
-failed checks move back to `Rework` for Codex.
+Safe completed tickets post proof-packet evidence and move to `Merging`. The
+lightweight merge steward handles GitHub merge queue and marks the issue `Done`
+after the PR lands. Failed checks and mechanical conflicts move back to
+`Rework`; destructive, semantic, paid/live, security, or scope-drift exceptions
+move to `Safety Review`.
 
 ## Proof Packets
 
-Every ticket moved to `Human Review` should have a Linear comment headed
-`## Proof Packet` containing:
+Every safe completed ticket moved to `Merging` should have a Linear comment
+headed `## Proof Packet` containing:
 
 - PR link.
 - Parent Objective, when the ticket belongs to one.
@@ -74,9 +75,11 @@ Every ticket moved to `Human Review` should have a Linear comment headed
 - CI status or link.
 - Risks, assumptions, and known gaps.
 - Generated artifact path or link when relevant.
+- Exact blocker when routed to `Safety Review`.
 
 For Silver, proof is usually a command result, test output, migration check, or
-generated report. A prose claim that something is done is not enough.
+generated report. A prose claim that something is done is not enough. Proof
+packets are audit receipts and steward inputs, not routine approval requests.
 
 ## Run
 
@@ -133,7 +136,7 @@ Preview current actions:
 python scripts/merge_steward.py --dry-run
 ```
 
-Keep it running while reviewing batches:
+Keep it running while batches run:
 
 ```bash
 tmux kill-session -t silver-merge-steward 2>/dev/null || true
