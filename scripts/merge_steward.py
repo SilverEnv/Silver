@@ -1093,11 +1093,10 @@ def choose_pr_for_issue(
     issue: LinearIssue,
     pull_requests: Sequence[PullRequest],
 ) -> PullRequest | None:
-    identifier = issue.identifier.lower()
     matches = [
         pr
         for pr in pull_requests
-        if identifier in " ".join((pr.title, pr.head_ref_name, pr.body)).lower()
+        if pr_identity_matches_issue(issue.identifier, pr)
     ]
     if not matches:
         return None
@@ -1106,6 +1105,18 @@ def choose_pr_for_issue(
     if open_matches:
         return max(open_matches, key=lambda pr: pr.number)
     return max(matches, key=lambda pr: pr.number)
+
+
+def pr_identity_matches_issue(identifier: str, pr: PullRequest) -> bool:
+    # PR bodies can contain proof-packet audit text for other tickets, so only
+    # identity-bearing fields are safe for issue matching.
+    identity_text = "\n".join((pr.title, pr.head_ref_name))
+    return _contains_issue_token(identity_text, identifier)
+
+
+def _contains_issue_token(text: str, identifier: str) -> bool:
+    escaped = re.escape(identifier)
+    return bool(re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", text, re.I))
 
 
 def format_decision(

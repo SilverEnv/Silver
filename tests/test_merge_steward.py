@@ -494,6 +494,43 @@ def test_choose_pr_prefers_open_highest_number_match() -> None:
     assert pr.number == 30
 
 
+def test_choose_pr_ignores_identifier_mentions_in_proof_body() -> None:
+    issue = _issue("ARR-41", state="Backlog")
+    pull_requests = (
+        _pr(
+            41,
+            title="ARR-47 Add admission steward for Objective-driven Todo admission",
+            head_ref_name="codex/admission-steward",
+            body=(
+                "Live dry-run decisions:\n"
+                "ARR-41 | promote | Backlog | approved Objective\n"
+                "ARR-42 | promote | Backlog | approved Objective\n"
+            ),
+            state="MERGED",
+            merged_at="2026-04-29T12:51:06Z",
+        ),
+    )
+
+    pr = merge_steward.choose_pr_for_issue(issue, pull_requests)
+
+    assert pr is None
+
+
+def test_choose_pr_does_not_match_identifier_prefix() -> None:
+    issue = _issue("ARR-4")
+    pull_requests = (
+        _pr(
+            41,
+            title="ARR-41 Add admission steward",
+            head_ref_name="arr-41-admission-steward",
+        ),
+    )
+
+    pr = merge_steward.choose_pr_for_issue(issue, pull_requests)
+
+    assert pr is None
+
+
 def test_parse_github_repo_handles_https_and_ssh_remotes() -> None:
     assert (
         merge_steward.parse_github_repo("https://github.com/SilverEnv/Silver.git")
