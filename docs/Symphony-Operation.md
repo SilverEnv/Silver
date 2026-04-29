@@ -85,6 +85,11 @@ The rule is: keep the system full of coherent Objectives, not just busy agents.
 An Objective is the user-facing unit of work. It should be large enough to be
 meaningful and small enough to prove.
 
+Objective files live in [`objectives/`](objectives/). Use
+[`objectives/TEMPLATE.md`](objectives/TEMPLATE.md) for new Objectives, keep
+approved or ready Objectives in [`objectives/active/`](objectives/active/), and
+move completed handoffs to [`objectives/completed/`](objectives/completed/).
+
 Good Objective:
 
 ```text
@@ -296,7 +301,7 @@ Inputs:
 SPEC.md
 docs/index.md
 docs/exec-plans/active/*
-docs/objectives/active/*, once available
+docs/objectives/active/*
 Linear issues
 GitHub PRs
 repo status
