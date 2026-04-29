@@ -772,13 +772,7 @@ def safety_review_trigger(issue: LinearIssue, pr: PullRequest) -> str | None:
     secret_path = _first_matching_path(paths, _is_secret_handling_path)
     if secret_path is not None:
         return f"secret handling change: {secret_path}"
-    if _matches_any(
-        pr_metadata,
-        (
-            r"\b(secret|credential|api[_ -]?key|token)\b",
-            r"\b(linear_api_key|fmp_api_key)\b",
-        ),
-    ):
+    if _metadata_says_secret_handling_changed(pr_metadata):
         return "secret handling change: PR metadata"
 
     external_path = _first_matching_path(paths, _is_external_call_path)
@@ -950,6 +944,40 @@ def _diff_for_path(
 
 def _matches_any(text: str, patterns: Sequence[str]) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _metadata_says_secret_handling_changed(text: str) -> bool:
+    for line in text.splitlines():
+        if not _matches_any(
+            line,
+            (
+                r"\b(secret|credential|api[_ -]?key|token)\b",
+                r"\b(linear_api_key|fmp_api_key)\b",
+            ),
+        ):
+            continue
+        if _matches_any(
+            line,
+            (
+                r"\b(do not|does not|did not|no|not|never|without)\b.{0,50}"
+                r"\b(secret|credential|api[_ -]?key|token)\b",
+                r"\b(secret|credential|api[_ -]?key|token)\b.{0,50}"
+                r"\b(no|not|none|absent)\b",
+            ),
+        ):
+            continue
+        if _matches_any(
+            line,
+            (
+                r"\b(secret|credential|api[_ -]?key|token)\b.{0,50}"
+                r"\b(add|change|copy|expose|handle|log|read|rotate|store|update|write)\b",
+                r"\b(add|change|copy|expose|handle|log|read|rotate|store|update|write)\b"
+                r".{0,50}\b(secret|credential|api[_ -]?key|token)\b",
+                r"\b(linear_api_key|fmp_api_key)\b",
+            ),
+        ):
+            return True
+    return False
 
 
 def _semantic_diff_or_metadata(

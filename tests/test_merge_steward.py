@@ -264,6 +264,44 @@ def test_routine_docs_and_tests_still_queue() -> None:
     assert "green" in decision.reason
 
 
+def test_negative_secret_checklist_text_does_not_trigger_safety_review() -> None:
+    issue = _issue("ARR-48")
+    pr = _pr(
+        42,
+        title="ARR-48 Tighten merge steward PR matching",
+        changed_files=_changed_files("scripts/merge_steward.py"),
+        body="- [x] Does not commit secrets or local data",
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "queue"
+    assert "green" in decision.reason
+
+
+def test_affirmative_secret_metadata_triggers_safety_review() -> None:
+    issue = _issue("ARR-49")
+    pr = _pr(
+        49,
+        title="ARR-49 Update credential handling",
+        changed_files=_changed_files("README.md"),
+        body="Store API token material for integration tests.",
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "move_safety_review"
+    assert "secret handling" in decision.reason
+
+
 def test_mechanical_steward_fixes_still_queue() -> None:
     issue = _issue("ARR-42")
     pr = _pr(
