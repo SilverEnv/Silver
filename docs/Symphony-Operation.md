@@ -22,25 +22,25 @@ Goal
       -> Work Packet
           -> Linear Tickets
               -> PRs
-                  -> Human Review
-                      -> Merging
-                          -> Done or Rework
+                  -> Merging
+                      -> Done or Rework
 ```
 
-Michael should mostly review Objectives and proof packets. The system should
-handle ticket decomposition, execution, and routine merge shepherding.
+Michael reviews Objectives and safety exceptions. The system handles ticket
+decomposition, execution, routine repair, merge shepherding, and proof-packet
+audit trails after a ticket is approved into `Todo`.
 
 ## Roles
 
 | Role | Responsibility |
 |---|---|
-| Michael | Approves Objectives, reviews proof packets, moves approved work to `Merging`. |
+| Michael | Approves Objectives and Safety Review exceptions. |
 | Symphony core | Runs agents for active Linear tickets. |
-| Codex builder | Implements one scoped ticket in one workspace. |
+| Codex builder | Implements one scoped ticket, posts proof, and moves safe completed work to `Merging`. |
 | Planning steward | Proposes Objectives and creates guarded tickets. |
 | Capacity steward | Keeps `Todo` filled within approved limits. |
 | Migration allocator | Serializes and reserves schema migration work. |
-| Merge steward | Queues approved green PRs and marks landed work `Done`. |
+| Merge steward | Queues safe green PRs and marks landed work `Done`. |
 | Conflict steward | Repairs stale/conflicting PRs or routes semantic conflicts to `Rework`. |
 
 Some steward roles may start as manual scripts or manual Codex sessions before
@@ -55,9 +55,10 @@ The current Silver loop is batch automation:
 3. Michael moves selected tickets to `Todo`.
 4. Symphony assigns agents.
 5. Agents implement, open PRs, and post proof packets.
-6. Michael reviews and moves approved tickets to `Merging`.
+6. Safe completed tickets move to `Merging`.
 7. Merge steward queues clean PRs and marks landed tickets `Done`.
-8. Failed checks, conflicts, or review issues move to `Rework`.
+8. Failed checks or mechanical conflicts move to `Rework`.
+9. Safety exceptions move to `Safety Review`.
 
 This is useful, but it still depends on Michael asking for each batch. The next
 unlock is continuous Objective-driven work generation.
@@ -73,9 +74,9 @@ The target Silver loop is continuous but bounded:
    `Backlog`.
 4. Capacity steward promotes safe, unblocked tickets to `Todo`.
 5. Symphony builds tickets up to the configured concurrency limit.
-6. Merge steward lands approved PRs.
+6. Merge steward lands safe completed PRs.
 7. Conflict steward repairs mechanical conflicts and routes semantic conflicts
-   to `Rework`.
+   to `Rework` or `Safety Review`.
 8. Planning steward keeps the queue full from approved Objectives.
 
 The rule is: keep the system full of coherent Objectives, not just busy agents.
@@ -243,7 +244,7 @@ Validation Required:
 Commands and expected artifact paths.
 
 Proof Packet Requirements:
-What Michael needs in order to approve.
+What the merge steward and Michael need in order to audit, repair, or stop.
 ```
 
 Tickets should not say "improve ingestion" without ownership and acceptance
@@ -281,14 +282,16 @@ Silver uses Linear as the control plane. These states are policy, not just UI.
 | `Backlog` | No | Planned work. Do not start automatically. |
 | `Todo` | Yes | Approved and ready for an agent. |
 | `In Progress` | Yes | Agent is implementing. |
-| `Rework` | Yes | Agent should repair review feedback, CI failure, or conflict. |
-| `Human Review` | No | Waiting for Michael's review. |
-| `Merging` | No | Approved by Michael; merge steward owns it. |
+| `Rework` | Yes | Agent should repair steward feedback, CI failure, or mechanical conflict. |
+| `Safety Review` | No | Waiting for Michael because the ticket hit a serious safety or semantic exception. |
+| `Merging` | No | Safe completed work; merge steward owns it. |
 | `Done` | No | Landed and complete. |
 | `Canceled` / `Duplicate` | No | Terminal non-work state. |
 
-Agents should not mark implementation work `Done`. They stop at `Human Review`
-with evidence. Michael moves approved work to `Merging`.
+Agents should not mark implementation work `Done`. Safe completed tickets post
+evidence and move to `Merging`. Tickets that hit destructive, semantic,
+paid/live, security, or scope-drift exceptions move to `Safety Review` with a
+clear blocker.
 
 ## Planning Steward
 
@@ -499,7 +502,7 @@ It should:
 
 1. Read Linear issues in `Merging`.
 2. Find the matching GitHub PR.
-3. Confirm the PR still matches the approved scope.
+3. Confirm the PR still matches the approved ticket scope.
 4. Confirm required checks are passing.
 5. Add the PR to the GitHub merge queue.
 6. Mark the issue `Done` after merge.
@@ -519,7 +522,7 @@ Current command references live in [`SYMPHONY.md`](SYMPHONY.md).
 
 ## Proof Packets
 
-Every implementation ticket must end with a Linear comment headed:
+Every safe completed implementation ticket must include a Linear comment headed:
 
 ```text
 ## Proof Packet
@@ -537,10 +540,12 @@ validation commands and outcomes
 CI status or link
 risks, assumptions, and known gaps
 generated artifact path or link, when relevant
-exact blocker, when incomplete
+exact blocker, when incomplete or routed to `Safety Review`
 ```
 
-Michael should reject proof packets that only make prose claims.
+Proof packets are audit receipts and steward inputs. They are not routine
+approval requests. A packet that only makes prose claims is insufficient for
+`Merging`.
 
 The Objective Impact summary should answer:
 
@@ -576,6 +581,29 @@ ruff check .
 Tickets should run the narrowest meaningful checks while iterating and broader
 checks before handoff.
 
+## Safety Review
+
+`Safety Review` is the only human stop after a ticket enters `Todo`.
+Use it when automation cannot safely decide whether the change remains within
+the approved Objective and ticket scope.
+
+Safety Review is required for:
+
+```text
+data deletion or destructive migration
+PIT rule changes
+feature, label, or backtest metric semantic conflicts
+secret or credential handling changes
+new paid or live external service behavior
+ticket scope drift
+automation permission expansion
+ambiguous schema meaning
+```
+
+Safety Review is not required for routine stale branches, mechanical merge
+conflicts, formatting conflicts, failed checks with clear fixes, or proof-packet
+refreshes. Those move through `Rework`.
+
 ## Automation Ladder
 
 Do not jump straight to overnight autonomy. Increase automation only after the
@@ -585,10 +613,10 @@ previous rung produces good evidence.
 2. Planning steward proposes Objectives and tickets.
 3. Planning steward creates tickets in `Backlog`.
 4. Capacity steward promotes low-risk tickets to `Todo`.
-5. Merge steward continuously handles approved PRs.
+5. Merge steward continuously handles safe completed PRs.
 6. Conflict steward repairs mechanical conflicts.
 7. Overnight mode keeps `Todo` topped up from approved Objectives.
-8. Human review focuses on Objective outcomes and exception paths.
+8. Michael review focuses on Objective outcomes and exception paths.
 
 Human approval remains required for:
 
