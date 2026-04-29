@@ -92,6 +92,7 @@ def test_report_run_creates_and_finishes_model_and_backtest_success(
     assert len(repo.model_finishes) == 1
     assert len(repo.backtest_creates) == 1
     assert len(repo.backtest_finishes) == 1
+    assert repo.traceability_loads == [2]
 
     model_create = repo.model_creates[0]
     assert model_create.name == "Momentum 12-1 falsifier"
@@ -131,6 +132,47 @@ def test_report_run_creates_and_finishes_model_and_backtest_success(
     report_text = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "| model_run_id | 1 |" in report_text
     assert "| backtest_run_id | 2 |" in report_text
+
+
+def test_report_traceability_validation_fails_clearly_on_metadata_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calendar = _calendar()
+    repo = FakeMetadataRepository(
+        traceability_overrides={"model_code_git_sha": "badcafe"},
+    )
+    args = cli.parse_args(
+        [
+            "--database-url",
+            "postgresql://user:pass@localhost/silver",
+            "--output-path",
+            str(tmp_path / "report.md"),
+        ]
+    )
+    monkeypatch.setattr(cli, "_git_sha", lambda: "abcdef0")
+    monkeypatch.setattr(cli, "run_label_scramble", _fake_label_scramble)
+    monkeypatch.setattr(
+        cli,
+        "load_persisted_inputs",
+        lambda *_args, **_kwargs: _persisted_inputs(
+            rows=_momentum_rows(calendar, session_count=420),
+        ),
+    )
+
+    with pytest.raises(
+        cli.FalsifierCliError,
+        match="model_runs.code_git_sha",
+    ):
+        cli.run_report_with_metadata(
+            args,
+            client=object(),
+            metadata_repository=repo,
+            calendar=calendar,
+        )
+
+    assert repo.traceability_loads == [2]
+    assert not (tmp_path / "report.md").exists()
 
 
 def test_report_run_finishes_model_and_backtest_as_insufficient_data(
@@ -304,11 +346,17 @@ def _fake_label_scramble(*_args: Any, **_kwargs: Any) -> FakeLabelScrambleResult
 
 
 class FakeMetadataRepository:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        traceability_overrides: dict[str, Any] | None = None,
+    ) -> None:
         self.model_creates: list[Any] = []
         self.model_finishes: list[tuple[int, Any]] = []
         self.backtest_creates: list[Any] = []
         self.backtest_finishes: list[tuple[int, Any]] = []
+        self.traceability_loads: list[int] = []
+        self.traceability_overrides = traceability_overrides or {}
 
     def create_model_run(self, run: Any) -> Any:
         self.model_creates.append(run)
@@ -341,3 +389,41 @@ class FakeMetadataRepository:
             backtest_run_key=self.backtest_creates[0].backtest_run_key,
             status=finish.status,
         )
+
+    def load_backtest_traceability_snapshot(self, backtest_run_id: int) -> Any:
+        self.traceability_loads.append(backtest_run_id)
+        model_create = self.model_creates[0]
+        model_finish = self.model_finishes[0][1]
+        backtest_create = self.backtest_creates[0]
+        backtest_finish = self.backtest_finishes[0][1]
+        values = {
+            "model_run_id": 1,
+            "model_run_key": model_create.model_run_key,
+            "model_status": model_finish.status,
+            "model_code_git_sha": model_create.code_git_sha,
+            "model_feature_set_hash": model_create.feature_set_hash,
+            "model_horizon_days": model_create.horizon_days,
+            "model_target_kind": model_create.target_kind,
+            "model_random_seed": model_create.random_seed,
+            "model_cost_assumptions": dict(model_create.cost_assumptions),
+            "model_metrics": dict(model_finish.metrics),
+            "model_available_at_policy_versions": dict(
+                model_create.available_at_policy_versions,
+            ),
+            "model_input_fingerprints": dict(model_create.input_fingerprints),
+            "backtest_run_id": 2,
+            "backtest_run_key": backtest_create.backtest_run_key,
+            "backtest_status": backtest_finish.status,
+            "backtest_model_run_id": backtest_create.model_run_id,
+            "backtest_universe_name": backtest_create.universe_name,
+            "backtest_horizon_days": backtest_create.horizon_days,
+            "backtest_target_kind": backtest_create.target_kind,
+            "backtest_cost_assumptions": dict(backtest_finish.cost_assumptions),
+            "backtest_metrics": dict(backtest_finish.metrics),
+            "backtest_baseline_metrics": dict(backtest_finish.baseline_metrics),
+            "backtest_multiple_comparisons_correction": (
+                backtest_finish.multiple_comparisons_correction
+            ),
+        }
+        values.update(self.traceability_overrides)
+        return cli.BacktestTraceabilitySnapshot(**values)

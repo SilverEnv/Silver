@@ -107,6 +107,35 @@ class BacktestRunRecord:
     status: str
 
 
+@dataclass(frozen=True, slots=True)
+class BacktestTraceabilitySnapshot:
+    """Joined model/backtest metadata used to audit a reported run identity."""
+
+    model_run_id: int
+    model_run_key: str
+    model_status: str
+    model_code_git_sha: str
+    model_feature_set_hash: str
+    model_horizon_days: int
+    model_target_kind: str
+    model_random_seed: int
+    model_cost_assumptions: Mapping[str, Any]
+    model_metrics: Mapping[str, Any]
+    model_available_at_policy_versions: Mapping[str, Any]
+    model_input_fingerprints: Mapping[str, Any]
+    backtest_run_id: int
+    backtest_run_key: str
+    backtest_status: str
+    backtest_model_run_id: int
+    backtest_universe_name: str
+    backtest_horizon_days: int
+    backtest_target_kind: str
+    backtest_cost_assumptions: Mapping[str, Any]
+    backtest_metrics: Mapping[str, Any]
+    backtest_baseline_metrics: Mapping[str, Any]
+    backtest_multiple_comparisons_correction: str | None
+
+
 class AnalyticsRunRepository:
     """Write and finish rows in ``silver.analytics_runs``."""
 
@@ -237,6 +266,27 @@ class BacktestMetadataRepository:
                 f"backtest run {params['run_id']} was not found or is not running"
             )
         return _backtest_run_record(row)
+
+    def load_backtest_traceability_snapshot(
+        self,
+        backtest_run_id: int,
+    ) -> BacktestTraceabilitySnapshot:
+        """Load the joined model/backtest metadata for a reported backtest run."""
+        params = {
+            "backtest_run_id": _metadata_positive_int(
+                backtest_run_id,
+                "backtest_run_id",
+            ),
+        }
+        with _cursor(self._connection) as cursor:
+            cursor.execute(_SELECT_BACKTEST_TRACEABILITY_SQL, params)
+            row = cursor.fetchone()
+        if row is None:
+            raise BacktestMetadataError(
+                f"backtest run {params['backtest_run_id']} traceability metadata "
+                "was not found"
+            )
+        return _backtest_traceability_snapshot(row)
 
     def _load_model_run_by_key(self, model_run_key: str) -> object:
         with _cursor(self._connection) as cursor:
@@ -485,6 +535,139 @@ def _backtest_run_record(row: object) -> BacktestRunRecord:
             "backtest_runs.backtest_run_key",
         ),
         status=_metadata_row_str(row, "status", 2, "backtest_runs.status"),
+    )
+
+
+def _backtest_traceability_snapshot(row: object) -> BacktestTraceabilitySnapshot:
+    return BacktestTraceabilitySnapshot(
+        model_run_id=_metadata_row_int(row, "model_run_id", 0, "model_runs.id"),
+        model_run_key=_metadata_row_str(
+            row,
+            "model_run_key",
+            1,
+            "model_runs.model_run_key",
+        ),
+        model_status=_metadata_row_str(row, "model_status", 2, "model_runs.status"),
+        model_code_git_sha=_metadata_row_str(
+            row,
+            "model_code_git_sha",
+            3,
+            "model_runs.code_git_sha",
+        ),
+        model_feature_set_hash=_metadata_row_str(
+            row,
+            "model_feature_set_hash",
+            4,
+            "model_runs.feature_set_hash",
+        ),
+        model_horizon_days=_metadata_row_int(
+            row,
+            "model_horizon_days",
+            5,
+            "model_runs.horizon_days",
+        ),
+        model_target_kind=_metadata_row_str(
+            row,
+            "model_target_kind",
+            6,
+            "model_runs.target_kind",
+        ),
+        model_random_seed=_metadata_row_int(
+            row,
+            "model_random_seed",
+            7,
+            "model_runs.random_seed",
+        ),
+        model_cost_assumptions=_metadata_row_json_object(
+            row,
+            "model_cost_assumptions",
+            8,
+            "model_runs.cost_assumptions",
+        ),
+        model_metrics=_metadata_row_json_object(
+            row,
+            "model_metrics",
+            9,
+            "model_runs.metrics",
+        ),
+        model_available_at_policy_versions=_metadata_row_json_object(
+            row,
+            "model_available_at_policy_versions",
+            10,
+            "model_runs.available_at_policy_versions",
+        ),
+        model_input_fingerprints=_metadata_row_json_object(
+            row,
+            "model_input_fingerprints",
+            11,
+            "model_runs.input_fingerprints",
+        ),
+        backtest_run_id=_metadata_row_int(
+            row,
+            "backtest_run_id",
+            12,
+            "backtest_runs.id",
+        ),
+        backtest_run_key=_metadata_row_str(
+            row,
+            "backtest_run_key",
+            13,
+            "backtest_runs.backtest_run_key",
+        ),
+        backtest_status=_metadata_row_str(
+            row,
+            "backtest_status",
+            14,
+            "backtest_runs.status",
+        ),
+        backtest_model_run_id=_metadata_row_int(
+            row,
+            "backtest_model_run_id",
+            15,
+            "backtest_runs.model_run_id",
+        ),
+        backtest_universe_name=_metadata_row_str(
+            row,
+            "backtest_universe_name",
+            16,
+            "backtest_runs.universe_name",
+        ),
+        backtest_horizon_days=_metadata_row_int(
+            row,
+            "backtest_horizon_days",
+            17,
+            "backtest_runs.horizon_days",
+        ),
+        backtest_target_kind=_metadata_row_str(
+            row,
+            "backtest_target_kind",
+            18,
+            "backtest_runs.target_kind",
+        ),
+        backtest_cost_assumptions=_metadata_row_json_object(
+            row,
+            "backtest_cost_assumptions",
+            19,
+            "backtest_runs.cost_assumptions",
+        ),
+        backtest_metrics=_metadata_row_json_object(
+            row,
+            "backtest_metrics",
+            20,
+            "backtest_runs.metrics",
+        ),
+        backtest_baseline_metrics=_metadata_row_json_object(
+            row,
+            "backtest_baseline_metrics",
+            21,
+            "backtest_runs.baseline_metrics",
+        ),
+        backtest_multiple_comparisons_correction=_metadata_row_optional_str(
+            row,
+            "backtest_multiple_comparisons_correction",
+            22,
+            "backtest_runs.multiple_comparisons_correction",
+        ),
     )
 
 
@@ -796,6 +979,18 @@ def _metadata_row_date(row: object, key: str, index: int, name: str) -> date:
     return value
 
 
+def _metadata_row_json_object(
+    row: object,
+    key: str,
+    index: int,
+    name: str,
+) -> dict[str, Any]:
+    return _json_object(
+        _json_loads_if_needed(_row_value(row, key, index), name),
+        name,
+    )
+
+
 def _run_record(row: object) -> AnalyticsRunRecord:
     return AnalyticsRunRecord(
         id=_row_int(row, "id", 0, "analytics_runs.id"),
@@ -986,6 +1181,37 @@ SELECT
     multiple_comparisons_correction
 FROM silver.backtest_runs
 WHERE backtest_run_key = %(backtest_run_key)s
+LIMIT 1;
+""".strip()
+
+_SELECT_BACKTEST_TRACEABILITY_SQL = """
+SELECT
+    mr.id AS model_run_id,
+    mr.model_run_key,
+    mr.status AS model_status,
+    mr.code_git_sha AS model_code_git_sha,
+    mr.feature_set_hash AS model_feature_set_hash,
+    mr.horizon_days AS model_horizon_days,
+    mr.target_kind AS model_target_kind,
+    mr.random_seed AS model_random_seed,
+    mr.cost_assumptions AS model_cost_assumptions,
+    mr.metrics AS model_metrics,
+    mr.available_at_policy_versions AS model_available_at_policy_versions,
+    mr.input_fingerprints AS model_input_fingerprints,
+    br.id AS backtest_run_id,
+    br.backtest_run_key,
+    br.status AS backtest_status,
+    br.model_run_id AS backtest_model_run_id,
+    br.universe_name AS backtest_universe_name,
+    br.horizon_days AS backtest_horizon_days,
+    br.target_kind AS backtest_target_kind,
+    br.cost_assumptions AS backtest_cost_assumptions,
+    br.metrics AS backtest_metrics,
+    br.baseline_metrics AS backtest_baseline_metrics,
+    br.multiple_comparisons_correction AS backtest_multiple_comparisons_correction
+FROM silver.backtest_runs br
+JOIN silver.model_runs mr ON mr.id = br.model_run_id
+WHERE br.id = %(backtest_run_id)s
 LIMIT 1;
 """.strip()
 
