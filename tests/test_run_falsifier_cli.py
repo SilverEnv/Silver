@@ -499,10 +499,6 @@ class FakeMetadataRepository:
             ),
             "backtest_label_scramble_pass": backtest_finish.label_scramble_pass,
             "backtest_parameters": dict(backtest_create.parameters),
-            "backtest_label_scramble_metrics": dict(
-                backtest_finish.label_scramble_metrics,
-            ),
-            "backtest_label_scramble_pass": backtest_finish.label_scramble_pass,
             "backtest_multiple_comparisons_correction": (
                 backtest_finish.multiple_comparisons_correction
             ),
