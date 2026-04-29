@@ -320,6 +320,16 @@ Initial safe mode:
 scripts/planning_steward.py --propose
 ```
 
+The initial implementation is local and propose-only. It reads repository
+signals and prints Objective packets; it does not write to Linear, GitHub, the
+database, or vendors.
+
+Validate local proposal wiring:
+
+```text
+scripts/planning_steward.py --check
+```
+
 Next mode:
 
 ```text
