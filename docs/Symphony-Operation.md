@@ -326,8 +326,9 @@ scripts/planning_steward.py --propose
 ```
 
 The initial implementation is local and propose-only. It reads repository
-signals and prints Objective packets; it does not write to Linear, GitHub, the
-database, or vendors.
+signals, prefers approved files in `docs/objectives/active/`, and prints
+Objective packets with source metadata; it does not write to Linear, GitHub,
+the database, or vendors.
 
 Validate local proposal wiring:
 
