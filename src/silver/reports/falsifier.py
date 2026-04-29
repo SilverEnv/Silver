@@ -12,7 +12,7 @@ from silver.backtest.momentum_falsifier import MomentumBacktestRow
 from silver.backtest.momentum_falsifier import MomentumFalsifierResult
 
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +48,16 @@ class FalsifierFeatureMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class FalsifierRunIdentity:
+    """Durable registry identity for the model/backtest run behind a report."""
+
+    model_run_id: int
+    model_run_key: str
+    backtest_run_id: int
+    backtest_run_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class FalsifierReproducibilityMetadata:
     """Stable run metadata for reproducing a falsifier report."""
 
@@ -55,6 +65,7 @@ class FalsifierReproducibilityMetadata:
     git_sha: str
     input_fingerprint: str
     available_at_policy_versions: Mapping[str, int]
+    run_identity: FalsifierRunIdentity | None = None
     report_schema_version: int = REPORT_SCHEMA_VERSION
     random_seed: int | None = None
 
@@ -228,29 +239,7 @@ def render_week_1_momentum_report(report: FalsifierReport) -> str:
         "",
         _table(
             ("Field", "Value"),
-            (
-                ("Command", f"`{report.reproducibility.command}`"),
-                ("Git SHA", report.reproducibility.git_sha),
-                ("Feature definition hash", report.feature_metadata.definition_hash),
-                ("Feature set hash", report.feature_metadata.feature_set_hash),
-                ("Input fingerprint", report.reproducibility.input_fingerprint),
-                (
-                    "Available-at policy versions",
-                    _json_mapping(report.reproducibility.available_at_policy_versions),
-                ),
-                (
-                    "Random seed",
-                    (
-                        "none"
-                        if report.reproducibility.random_seed is None
-                        else str(report.reproducibility.random_seed)
-                    ),
-                ),
-                (
-                    "Report schema version",
-                    str(report.reproducibility.report_schema_version),
-                ),
-            ),
+            _reproducibility_rows(report),
         ),
     ]
     return "\n".join(lines) + "\n"
@@ -396,6 +385,43 @@ def _failure_mode_lines(failure_modes: Sequence[str]) -> str:
     if not failure_modes:
         return "- None triggered by the thin Phase 1 checks."
     return "\n".join(f"- {failure_mode}" for failure_mode in failure_modes)
+
+
+def _reproducibility_rows(report: FalsifierReport) -> tuple[tuple[str, str], ...]:
+    identity = report.reproducibility.run_identity
+    identity_rows: tuple[tuple[str, str], ...] = ()
+    if identity is not None:
+        identity_rows = (
+            ("model_run_id", str(identity.model_run_id)),
+            ("model_run_key", identity.model_run_key),
+            ("backtest_run_id", str(identity.backtest_run_id)),
+            ("backtest_run_key", identity.backtest_run_key),
+        )
+
+    return (
+        ("Command", f"`{report.reproducibility.command}`"),
+        *identity_rows,
+        ("Git SHA", report.reproducibility.git_sha),
+        ("Feature definition hash", report.feature_metadata.definition_hash),
+        ("Feature set hash", report.feature_metadata.feature_set_hash),
+        ("Input fingerprint", report.reproducibility.input_fingerprint),
+        (
+            "Available-at policy versions",
+            _json_mapping(report.reproducibility.available_at_policy_versions),
+        ),
+        (
+            "Random seed",
+            (
+                "none"
+                if report.reproducibility.random_seed is None
+                else str(report.reproducibility.random_seed)
+            ),
+        ),
+        (
+            "Report schema version",
+            str(report.reproducibility.report_schema_version),
+        ),
+    )
 
 
 def _table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:

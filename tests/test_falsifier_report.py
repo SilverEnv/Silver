@@ -11,6 +11,7 @@ from silver.reports.falsifier import (
     FalsifierInputCounts,
     FalsifierReport,
     FalsifierReproducibilityMetadata,
+    FalsifierRunIdentity,
     UniverseMember,
     coverage_from_rows,
     fingerprint_momentum_inputs,
@@ -67,6 +68,12 @@ def test_report_rendering_is_deterministic_and_contains_required_sections() -> N
             git_sha="f" * 40,
             input_fingerprint=fingerprint_momentum_inputs(rows),
             available_at_policy_versions={"daily_price": 1},
+            run_identity=FalsifierRunIdentity(
+                model_run_id=101,
+                model_run_key="model-run-momentum-12-1-202401",
+                backtest_run_id=202,
+                backtest_run_key="backtest-run-momentum-12-1-202401",
+            ),
         ),
     )
 
@@ -85,7 +92,15 @@ def test_report_rendering_is_deterministic_and_contains_required_sections() -> N
     assert "## Reproducibility" in rendered
     assert "| Horizon | 5 trading sessions |" in rendered
     assert "| Feature version | momentum_12_1 v1 |" in rendered
+    assert "| model_run_id | 101 |" in rendered
+    assert "| model_run_key | model-run-momentum-12-1-202401 |" in rendered
+    assert "| backtest_run_id | 202 |" in rendered
+    assert "| backtest_run_key | backtest-run-momentum-12-1-202401 |" in rendered
     assert "| Git SHA | " + "f" * 40 + " |" in rendered
+    assert "| Feature definition hash | " + "a" * 64 + " |" in rendered
+    assert "| Feature set hash | " + "a" * 64 + " |" in rendered
+    assert "| Input fingerprint | " + fingerprint_momentum_inputs(rows) + " |" in rendered
+    assert "| Available-at policy versions | `{\"daily_price\":1}` |" in rendered
 
 
 def test_missing_prerequisite_message_names_materialization_step() -> None:

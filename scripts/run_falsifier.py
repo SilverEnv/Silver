@@ -39,6 +39,7 @@ from silver.reports.falsifier import (  # noqa: E402
     FalsifierInputCounts,
     FalsifierReport,
     FalsifierReproducibilityMetadata,
+    FalsifierRunIdentity,
     UniverseMember,
     coverage_from_rows,
     fingerprint_momentum_inputs,
@@ -231,6 +232,8 @@ def run_report(args: argparse.Namespace) -> None:
         round_trip_cost_bps=DEFAULT_ROUND_TRIP_COST_BPS,
     )
     feature = persisted_inputs.feature_definition
+    feature_set_hash = _feature_set_hash(feature)
+    git_sha = _git_sha()
     report = FalsifierReport(
         strategy=args.strategy,
         horizon=args.horizon,
@@ -241,14 +244,21 @@ def run_report(args: argparse.Namespace) -> None:
             name=feature.name,
             version=feature.version,
             definition_hash=feature.definition_hash,
-            feature_set_hash=_feature_set_hash(feature),
+            feature_set_hash=feature_set_hash,
         ),
         backtest_result=result,
         reproducibility=FalsifierReproducibilityMetadata(
             command=_target_command(args),
-            git_sha=_git_sha(),
+            git_sha=git_sha,
             input_fingerprint=fingerprint_momentum_inputs(persisted_inputs.rows),
             available_at_policy_versions=persisted_inputs.available_at_policy_versions,
+            run_identity=_load_run_identity(
+                client,
+                horizon=args.horizon,
+                universe=args.universe,
+                feature_set_hash=feature_set_hash,
+                status=result.status,
+            ),
         ),
     )
     write_report(args.output_path, render_week_1_momentum_report(report))
@@ -472,6 +482,72 @@ WHERE valid_to IS NULL;
     if not isinstance(rows, Mapping):
         raise FalsifierCliError("available_at policy versions query returned non-object")
     return {str(key): int(value) for key, value in rows.items()}
+
+
+def _load_run_identity(
+    client: PsqlJsonClient,
+    *,
+    horizon: int,
+    universe: str,
+    feature_set_hash: str,
+    status: str,
+) -> FalsifierRunIdentity | None:
+    if not _registry_tables_exist(client):
+        return None
+
+    rows = client.fetch_json(
+        f"""
+SELECT COALESCE(jsonb_agg(to_jsonb(row)), '[]'::jsonb)::text
+FROM (
+    SELECT
+        mr.id AS model_run_id,
+        mr.model_run_key,
+        br.id AS backtest_run_id,
+        br.backtest_run_key
+    FROM silver.backtest_runs br
+    JOIN silver.model_runs mr ON mr.id = br.model_run_id
+    WHERE br.universe_name = {_sql_literal(universe)}
+      AND br.horizon_days = {horizon}
+      AND br.status = {_sql_literal(status)}
+      AND mr.horizon_days = {horizon}
+      AND mr.status = {_sql_literal(status)}
+      AND mr.feature_set_hash = {_sql_literal(feature_set_hash)}
+    ORDER BY br.finished_at DESC NULLS LAST, br.started_at DESC, br.id DESC
+    LIMIT 1
+) row;
+""".strip()
+    )
+    if not isinstance(rows, list):
+        raise FalsifierCliError("run identity query returned non-list")
+    if not rows:
+        return None
+    row = rows[0]
+    if not isinstance(row, Mapping):
+        raise FalsifierCliError("run identity query returned non-object row")
+    return FalsifierRunIdentity(
+        model_run_id=_required_int(row, "model_run_id"),
+        model_run_key=_required_str(row, "model_run_key"),
+        backtest_run_id=_required_int(row, "backtest_run_id"),
+        backtest_run_key=_required_str(row, "backtest_run_key"),
+    )
+
+
+def _registry_tables_exist(client: PsqlJsonClient) -> bool:
+    rows = client.fetch_json(
+        """
+SELECT jsonb_build_object(
+    'model_runs', to_regclass('silver.model_runs') IS NOT NULL,
+    'backtest_runs', to_regclass('silver.backtest_runs') IS NOT NULL
+)::text;
+""".strip()
+    )
+    if not isinstance(rows, Mapping):
+        raise FalsifierCliError("registry table check returned non-object")
+    model_runs = rows.get("model_runs")
+    backtest_runs = rows.get("backtest_runs")
+    if not isinstance(model_runs, bool) or not isinstance(backtest_runs, bool):
+        raise FalsifierCliError("registry table check returned non-boolean fields")
+    return model_runs and backtest_runs
 
 
 def _validate_args(args: argparse.Namespace) -> None:
