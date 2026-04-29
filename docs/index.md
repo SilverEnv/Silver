@@ -21,6 +21,12 @@ and humans building Silver.
 
 ## Plans
 
+- [`objectives/TEMPLATE.md`](objectives/TEMPLATE.md): required Objective fields
+  for approved work chunks before ticket decomposition
+- [`objectives/active/`](objectives/active/): Objectives approved or ready for
+  decomposition into implementation tickets
+- [`objectives/completed/`](objectives/completed/): completed Objective
+  handoffs
 - [`exec-plans/active/`](exec-plans/active/): current implementation plans
 - [`exec-plans/completed/`](exec-plans/completed/): completed plans and handoffs
 
