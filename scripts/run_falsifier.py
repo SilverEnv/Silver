@@ -26,6 +26,7 @@ from silver.analytics import (  # noqa: E402
     BacktestRunCreate,
     BacktestRunFinish,
     BacktestRunRecord,
+    BacktestTraceabilitySnapshot,
     ModelRunCreate,
     ModelRunFinish,
     ModelRunRecord,
@@ -362,7 +363,6 @@ def run_report_with_metadata(
                 random_seed=DEFAULT_LABEL_SCRAMBLE_SEED,
             ),
         )
-        write_report(args.output_path, render_week_1_momentum_report(report))
     except Exception as exc:
         _finish_failed_metadata(
             metadata_repository,
@@ -372,18 +372,25 @@ def run_report_with_metadata(
         )
         raise
 
+    model_finish = ModelRunFinish(
+        status=result.status,
+        metrics=_model_run_metrics(result),
+    )
+    backtest_finish = _backtest_run_finish(
+        result=result,
+        rows=persisted_inputs.rows,
+        failure_message=None,
+    )
     finished_model = metadata_repository.finish_model_run(
         model_run.id,
-        ModelRunFinish(status=result.status, metrics=_model_run_metrics(result)),
+        model_finish,
     )
     finished_backtest = metadata_repository.finish_backtest_run(
         backtest_run.id,
-        _backtest_run_finish(
-            result=result,
-            rows=persisted_inputs.rows,
-            failure_message=None,
-        ),
+        backtest_finish,
     )
+    validate_falsifier_report_traceability(report, metadata_repository)
+    write_report(args.output_path, render_week_1_momentum_report(report))
     return FalsifierReportRun(
         model_run=finished_model,
         backtest_run=finished_backtest,
@@ -559,6 +566,16 @@ def _cost_assumptions(result: MomentumFalsifierResult | None) -> dict[str, objec
             "Subtracted from strategy and equal-weight baseline returns for "
             "each scored test date."
         ),
+    }
+
+
+def _model_run_cost_assumptions() -> dict[str, object]:
+    return {
+        "application": (
+            "subtracted from strategy and equal-weight baseline returns "
+            "for each scored test date"
+        ),
+        "round_trip_cost_bps": DEFAULT_ROUND_TRIP_COST_BPS,
     }
 
 
@@ -1047,13 +1064,7 @@ def _model_run_create(
         horizon_days=args.horizon,
         target_kind=persisted_inputs.target_kind,
         random_seed=FALSIFIER_RANDOM_SEED,
-        cost_assumptions={
-            "application": (
-                "subtracted from strategy and equal-weight baseline returns "
-                "for each scored test date"
-            ),
-            "round_trip_cost_bps": DEFAULT_ROUND_TRIP_COST_BPS,
-        },
+        cost_assumptions=_model_run_cost_assumptions(),
         parameters={
             "command": _target_command(args),
             "feature_definition": {
@@ -1254,6 +1265,158 @@ def _model_run_metrics(result: Any) -> Mapping[str, Any]:
         "strategy_net_return_stddev": metrics.strategy_net_return_stddev,
         "strategy_net_return_to_stddev": metrics.strategy_net_return_to_stddev,
     }
+
+
+def validate_falsifier_report_traceability(
+    report: FalsifierReport,
+    metadata_repository: BacktestMetadataRepository,
+) -> None:
+    """Validate that a generated report resolves to matching durable metadata."""
+    identity = report.reproducibility.run_identity
+    if identity is None:
+        raise FalsifierCliError(
+            "falsifier report traceability validation requires model_run_id "
+            "and backtest_run_id"
+        )
+
+    snapshot = metadata_repository.load_backtest_traceability_snapshot(
+        identity.backtest_run_id,
+    )
+    mismatches = _traceability_mismatches(report, identity, snapshot)
+    if mismatches:
+        raise FalsifierCliError(
+            "falsifier report traceability validation failed: "
+            + "; ".join(mismatches)
+        )
+
+
+def _traceability_mismatches(
+    report: FalsifierReport,
+    identity: FalsifierRunIdentity,
+    snapshot: BacktestTraceabilitySnapshot,
+) -> list[str]:
+    result = report.backtest_result
+    mismatches: list[str] = []
+    checks = (
+        ("model_runs.id", snapshot.model_run_id, identity.model_run_id),
+        (
+            "model_runs.model_run_key",
+            snapshot.model_run_key,
+            identity.model_run_key,
+        ),
+        ("model_runs.status", snapshot.model_status, result.status),
+        (
+            "model_runs.code_git_sha",
+            snapshot.model_code_git_sha,
+            report.reproducibility.git_sha,
+        ),
+        (
+            "model_runs.feature_set_hash",
+            snapshot.model_feature_set_hash,
+            report.feature_metadata.feature_set_hash,
+        ),
+        ("model_runs.horizon_days", snapshot.model_horizon_days, report.horizon),
+        ("model_runs.random_seed", snapshot.model_random_seed, FALSIFIER_RANDOM_SEED),
+        (
+            "model_runs.cost_assumptions",
+            snapshot.model_cost_assumptions,
+            _model_run_cost_assumptions(),
+        ),
+        ("model_runs.metrics", snapshot.model_metrics, _model_run_metrics(result)),
+        (
+            "model_runs.available_at_policy_versions",
+            snapshot.model_available_at_policy_versions,
+            report.reproducibility.available_at_policy_versions,
+        ),
+        (
+            "model_runs.input_fingerprints.joined_feature_label_rows_sha256",
+            snapshot.model_input_fingerprints.get(
+                "joined_feature_label_rows_sha256",
+            ),
+            report.reproducibility.input_fingerprint,
+        ),
+        ("backtest_runs.id", snapshot.backtest_run_id, identity.backtest_run_id),
+        (
+            "backtest_runs.backtest_run_key",
+            snapshot.backtest_run_key,
+            identity.backtest_run_key,
+        ),
+        ("backtest_runs.status", snapshot.backtest_status, result.status),
+        (
+            "backtest_runs.model_run_id",
+            snapshot.backtest_model_run_id,
+            identity.model_run_id,
+        ),
+        (
+            "backtest_runs.universe_name",
+            snapshot.backtest_universe_name,
+            report.universe_name,
+        ),
+        ("backtest_runs.horizon_days", snapshot.backtest_horizon_days, report.horizon),
+        (
+            "backtest_runs.target_kind",
+            snapshot.backtest_target_kind,
+            snapshot.model_target_kind,
+        ),
+        (
+            "backtest_runs.cost_assumptions",
+            snapshot.backtest_cost_assumptions,
+            _cost_assumptions(result),
+        ),
+        (
+            "backtest_runs.metrics",
+            snapshot.backtest_metrics,
+            _metrics_payload(result=result, failure_message=None),
+        ),
+        (
+            "backtest_runs.baseline_metrics",
+            snapshot.backtest_baseline_metrics,
+            _baseline_metrics(result),
+        ),
+        (
+            "backtest_runs.multiple_comparisons_correction",
+            snapshot.backtest_multiple_comparisons_correction,
+            MULTIPLE_COMPARISONS_CORRECTION,
+        ),
+    )
+    for field, actual, expected in checks:
+        _expect_trace_value(mismatches, field, actual=actual, expected=expected)
+    return mismatches
+
+
+def _expect_trace_value(
+    mismatches: list[str],
+    field: str,
+    *,
+    actual: object,
+    expected: object,
+) -> None:
+    normalized_actual = _trace_normalize(actual)
+    normalized_expected = _trace_normalize(expected)
+    if normalized_actual != normalized_expected:
+        mismatches.append(
+            f"{field} expected {_trace_token(normalized_expected)} "
+            f"got {_trace_token(normalized_actual)}"
+        )
+
+
+def _trace_normalize(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _trace_normalize(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, tuple):
+        return [_trace_normalize(item) for item in value]
+    if isinstance(value, list):
+        return [_trace_normalize(item) for item in value]
+    return value
+
+
+def _trace_token(value: object) -> str:
+    if isinstance(value, (Mapping, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return repr(value)
 
 
 def _validate_args(args: argparse.Namespace) -> None:

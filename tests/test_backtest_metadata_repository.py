@@ -90,6 +90,40 @@ def test_backtest_run_lifecycle_writes_linked_metadata() -> None:
     assert update_params["multiple_comparisons_correction"] == "bh"
 
 
+def test_traceability_snapshot_resolves_backtest_run_to_model_run_metadata() -> None:
+    connection = FakeMetadataConnection()
+    repository = BacktestMetadataRepository(connection)
+
+    model = repository.create_model_run(_model_run_create())
+    backtest = repository.create_backtest_run(_backtest_run_create(model_run_id=model.id))
+    repository.finish_model_run(
+        model.id,
+        ModelRunFinish(status="succeeded", metrics={"split_count": 3}),
+    )
+    repository.finish_backtest_run(backtest.id, _backtest_run_finish())
+
+    snapshot = repository.load_backtest_traceability_snapshot(backtest.id)
+
+    assert snapshot.model_run_id == model.id
+    assert snapshot.model_run_key == "model-run-1"
+    assert snapshot.model_status == "succeeded"
+    assert snapshot.model_code_git_sha == "abcdef0"
+    assert snapshot.model_feature_set_hash == "a" * 64
+    assert snapshot.model_horizon_days == 63
+    assert snapshot.model_available_at_policy_versions == {"daily_price": 1}
+    assert snapshot.backtest_run_id == backtest.id
+    assert snapshot.backtest_model_run_id == model.id
+    assert snapshot.backtest_universe_name == "falsifier_seed"
+    assert snapshot.backtest_horizon_days == 63
+    assert snapshot.backtest_metrics == {"sharpe_net": 0.71, "turnover": 0.18}
+    assert snapshot.backtest_baseline_metrics["equal_weight"]["sharpe_net"] == 0.08
+
+    sql, params = connection.executed[-1]
+    assert sql.startswith("SELECT\n    mr.id AS model_run_id")
+    assert "JOIN silver.model_runs mr ON mr.id = br.model_run_id" in sql
+    assert params == {"backtest_run_id": backtest.id}
+
+
 def test_create_model_run_is_idempotent_for_same_key() -> None:
     connection = FakeMetadataConnection()
     repository = BacktestMetadataRepository(connection)
@@ -337,6 +371,9 @@ class FakeMetadataCursor:
         if sql.startswith("UPDATE silver.backtest_runs"):
             self._finish_backtest_run(params)
             return
+        if sql.startswith("SELECT\n    mr.id AS model_run_id"):
+            self._one = self._traceability_snapshot(params["backtest_run_id"])
+            return
         raise AssertionError(f"unexpected SQL: {sql}")
 
     def fetchone(self) -> dict[str, Any] | None:
@@ -428,3 +465,43 @@ class FakeMetadataCursor:
                 self._one = row
                 return
         self._one = None
+
+    def _traceability_snapshot(self, backtest_run_id: int) -> dict[str, Any] | None:
+        for backtest in self.connection.backtest_runs.values():
+            if backtest["id"] != backtest_run_id:
+                continue
+            model = next(
+                row
+                for row in self.connection.model_runs.values()
+                if row["id"] == backtest["model_run_id"]
+            )
+            return {
+                "model_run_id": model["id"],
+                "model_run_key": model["model_run_key"],
+                "model_status": model["status"],
+                "model_code_git_sha": model["code_git_sha"],
+                "model_feature_set_hash": model["feature_set_hash"],
+                "model_horizon_days": model["horizon_days"],
+                "model_target_kind": model["target_kind"],
+                "model_random_seed": model["random_seed"],
+                "model_cost_assumptions": model["cost_assumptions"],
+                "model_metrics": model["metrics"],
+                "model_available_at_policy_versions": model[
+                    "available_at_policy_versions"
+                ],
+                "model_input_fingerprints": model["input_fingerprints"],
+                "backtest_run_id": backtest["id"],
+                "backtest_run_key": backtest["backtest_run_key"],
+                "backtest_status": backtest["status"],
+                "backtest_model_run_id": backtest["model_run_id"],
+                "backtest_universe_name": backtest["universe_name"],
+                "backtest_horizon_days": backtest["horizon_days"],
+                "backtest_target_kind": backtest["target_kind"],
+                "backtest_cost_assumptions": backtest["cost_assumptions"],
+                "backtest_metrics": backtest["metrics"],
+                "backtest_baseline_metrics": backtest["baseline_metrics"],
+                "backtest_multiple_comparisons_correction": backtest[
+                    "multiple_comparisons_correction"
+                ],
+            }
+        return None

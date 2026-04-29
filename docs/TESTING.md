@@ -88,3 +88,12 @@ constraint without reporting alpha.
 Backtest reports must include gross and net metrics, baseline comparison,
 regime breakdown, label-scramble result, and the exact model/run metadata used
 to reproduce the output.
+
+Falsifier report traceability validation must resolve the reported
+`backtest_run_id` through the durable `backtest_runs.model_run_id` join to
+`model_runs` before the report artifact is written. The validation checks the
+reported code SHA, feature-set hash, horizon, universe, cost assumptions,
+baseline metrics, headline metrics, available-at policy versions, and joined
+input fingerprint against stored metadata. The replay path is covered by
+`test_traceability_snapshot_resolves_backtest_run_to_model_run_metadata` and
+`test_report_traceability_validation_fails_clearly_on_metadata_mismatch`.
