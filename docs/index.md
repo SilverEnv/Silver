@@ -16,6 +16,8 @@ and humans building Silver.
 - [`TESTING.md`](TESTING.md): validation ladder and phase gates
 - [`SECURITY.md`](SECURITY.md): secrets, vendor data, and local environment
 - [`SYMPHONY.md`](SYMPHONY.md): how to run Symphony against this repository
+- [`Symphony-Operation.md`](Symphony-Operation.md): how Silver uses Symphony
+  Objectives, tickets, stewards, migrations, and conflicts
 
 ## Plans
 

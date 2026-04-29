@@ -103,6 +103,9 @@ Before moving a ticket to `Human Review`, post a Linear comment headed
 `## Proof Packet` with:
 
 - PR link.
+- Parent Objective, when the ticket belongs to one.
+- Objective Impact: 1-2 user-facing sentences explaining how this ticket moves
+  the parent Objective forward, plus what remains for that Objective.
 - Changed files summary.
 - Acceptance criteria status.
 - Validation commands run and outcome.
@@ -113,6 +116,8 @@ Before moving a ticket to `Human Review`, post a Linear comment headed
 
 Do not move to `Human Review` with only a prose claim. The packet must give
 Michael enough evidence to approve, reject, or move the issue to `Rework`.
+Keep the technical detail, but make the Objective Impact understandable to
+Michael as a user of the build system.
 
 ## Merge Steward Rules
 
