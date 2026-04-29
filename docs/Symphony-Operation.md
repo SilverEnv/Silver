@@ -38,7 +38,7 @@ audit trails after a ticket is approved into `Todo`.
 | Symphony core | Runs agents for active Linear tickets. |
 | Codex builder | Implements one scoped ticket, posts proof, and moves safe completed work to `Merging`. |
 | Planning steward | Proposes Objectives and creates guarded tickets. |
-| Capacity steward | Keeps `Todo` filled within approved limits. |
+| Admission steward | Promotes approved, unblocked `Backlog` tickets into `Todo` within capacity limits. |
 | Migration allocator | Serializes and reserves schema migration work. |
 | Merge steward | Queues safe green PRs and marks landed work `Done`. |
 | Conflict steward | Repairs stale/conflicting PRs or routes semantic conflicts to `Rework`. |
@@ -48,11 +48,11 @@ they become unattended automation.
 
 ## Current Lane
 
-The current Silver loop is batch automation:
+The current Silver loop is Objective-driven automation:
 
-1. Michael and Codex choose the next useful batch.
-2. Tickets are created in Linear.
-3. Michael moves selected tickets to `Todo`.
+1. Michael and Codex approve one or more Objectives.
+2. Planning creates scoped tickets in Linear `Backlog`.
+3. Admission steward promotes safe, unblocked tickets to `Todo`.
 4. Symphony assigns agents.
 5. Agents implement, open PRs, and post proof packets.
 6. Safe completed tickets move to `Merging`.
@@ -60,8 +60,8 @@ The current Silver loop is batch automation:
 8. Failed checks or mechanical conflicts move to `Rework`.
 9. Safety exceptions move to `Safety Review`.
 
-This is useful, but it still depends on Michael asking for each batch. The next
-unlock is continuous Objective-driven work generation.
+This lets Michael steer direction by Objective while the system meters routine
+work into active agent capacity.
 
 ## Target Lane
 
@@ -72,7 +72,7 @@ The target Silver loop is continuous but bounded:
 2. Michael approves one or more Objectives.
 3. Planning steward decomposes approved Objectives into Linear tickets in
    `Backlog`.
-4. Capacity steward promotes safe, unblocked tickets to `Todo`.
+4. Admission steward promotes safe, unblocked tickets to `Todo`.
 5. Symphony builds tickets up to the configured concurrency limit.
 6. Merge steward lands safe completed PRs.
 7. Conflict steward repairs mechanical conflicts and routes semantic conflicts
@@ -345,26 +345,25 @@ Next mode:
 scripts/planning_steward.py --create-backlog --objective <objective-id>
 ```
 
-Later mode:
-
-```text
-scripts/planning_steward.py --top-up-todo --max-active 5 --todo-buffer 8
-```
-
 Do not begin with unattended ticket creation. First prove that proposed
 Objectives and tickets are useful.
 
-## Capacity Steward
+## Admission Steward
 
-The capacity steward keeps enough safe tickets available for Symphony.
+The admission steward keeps enough safe tickets available for Symphony. It is an
+admission controller, not a builder, reviewer, or merger. Its only write is:
+
+```text
+Backlog -> Todo
+```
 
 Policy:
 
 ```text
-If active agents are below target
+If active work is below target
 and Todo count is below buffer
-and approved Objective has unblocked safe tickets
-then promote tickets from Backlog to Todo.
+and an approved Objective has unblocked runnable tickets
+then promote selected tickets from Backlog to Todo.
 ```
 
 Default operating target:
@@ -374,8 +373,35 @@ max active agents: 5
 Todo buffer: 5 to 10
 ```
 
-Do not promote tickets that share a high-risk conflict zone unless sequencing is
-explicit in the Objective.
+Do not try to avoid every possible conflict. Normal branch, test, docs, and
+shared-code conflicts should flow through `Rework`. The steward should block
+only hard conflicts:
+
+```text
+unfinished blocking relation
+open PR already exists for the same issue
+one active migration/schema-owner lane
+same high-risk steward/workflow file
+Safety Review required before start
+```
+
+Preview:
+
+```text
+python scripts/admission_steward.py --dry-run --max-active 5 --todo-buffer 5
+```
+
+Promote once:
+
+```text
+python scripts/admission_steward.py --promote --max-active 5 --todo-buffer 5
+```
+
+Watch mode:
+
+```text
+python scripts/admission_steward.py --watch --promote --max-active 5 --todo-buffer 5
+```
 
 ## Migration Lane
 
@@ -612,7 +638,7 @@ previous rung produces good evidence.
 1. Manual Objective writing.
 2. Planning steward proposes Objectives and tickets.
 3. Planning steward creates tickets in `Backlog`.
-4. Capacity steward promotes low-risk tickets to `Todo`.
+4. Admission steward promotes approved, low-risk tickets to `Todo`.
 5. Merge steward continuously handles safe completed PRs.
 6. Conflict steward repairs mechanical conflicts.
 7. Overnight mode keeps `Todo` topped up from approved Objectives.
@@ -632,7 +658,7 @@ moving unproven automation to a higher rung
 
 ## Objective Store
 
-When Objective flow becomes active, use a small file-based store:
+Objective flow uses a small file-based store:
 
 ```text
 docs/objectives/active/
@@ -644,34 +670,28 @@ link back to the Objective file or parent issue.
 
 Do not create a large planning database until the file-based flow is painful.
 
-## First Build For This System
+## Bootstrap Status
 
-Recommended first Objective:
+The first operating-system Objectives are now complete or in place:
 
 ```text
-Objective:
-Build an Objective-driven planning steward that proposes guarded Linear tickets
-from Silver's build plan.
+Planning steward:
+Creates or proposes Objective-backed tickets in Backlog.
 
-User Value:
-Michael can approve coherent Objectives instead of manually asking for batches
-of five tickets.
+Admission steward:
+Promotes approved, unblocked Backlog tickets into Todo up to capacity.
 
-Done When:
-- A proposal command reads repo docs and current Linear/GitHub state.
-- It outputs 1 to 3 candidate Objectives.
-- It decomposes an approved Objective into draft tickets with ownership,
-  dependencies, conflict zones, and validation.
-- It runs in propose-only mode without writing to Linear by default.
-
-Out Of Scope:
-- No unattended overnight mode.
-- No automatic Todo promotion.
-- No migration writes.
-- No automatic PR conflict repair.
+Merge steward:
+Queues safe completed PRs, marks landed issues Done, and routes failed checks or
+conflicts to Rework or Safety Review.
 ```
 
-This builds the control surface before increasing autonomy.
+The remaining maturity work is to make conflict repair more agentic and to add
+better evidence dashboards for overnight runs. The core lane is already:
+
+```text
+Objective approval -> Backlog tickets -> Admission -> Symphony -> Merging -> Done/Rework/Safety Review
+```
 
 ## User Checklist
 
