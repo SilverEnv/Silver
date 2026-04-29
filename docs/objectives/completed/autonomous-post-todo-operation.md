@@ -61,3 +61,11 @@ Conflict Zones:
 - `docs/SYMPHONY.md`
 - `scripts/merge_steward.py`
 - Linear workflow states
+
+Completion Evidence:
+- ARR-38 reset the post-`Todo` workflow contract and renamed Linear
+  `Human Review` to `Safety Review`.
+- ARR-39 added stale merged-issue reconciliation to the merge steward.
+- ARR-40 added merge steward Safety Review classification.
+- Local validation after ARR-40: `python scripts/merge_steward.py --check` and
+  `python -m pytest tests/test_merge_steward.py`.

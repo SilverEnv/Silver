@@ -117,6 +117,49 @@ Stop:
 tmux kill-session -t silver-symphony
 ```
 
+## Admission Steward
+
+Run the admission steward in the Silver repository shell where
+`LINEAR_API_KEY` is available. It reads approved Objective files, Backlog
+tickets, active Symphony states, blocking relations, and open GitHub PRs, then
+promotes safe runnable work from `Backlog` to `Todo`.
+
+Validate local wiring without network writes:
+
+```bash
+python scripts/admission_steward.py --check
+```
+
+Preview current admission decisions:
+
+```bash
+python scripts/admission_steward.py --dry-run --max-active 5 --todo-buffer 5
+```
+
+Promote once:
+
+```bash
+python scripts/admission_steward.py --promote --max-active 5 --todo-buffer 5
+```
+
+Keep it running while approved Objectives should feed Symphony:
+
+```bash
+tmux kill-session -t silver-admission-steward 2>/dev/null || true
+tmux new-session -d -s silver-admission-steward '
+  set -a
+  source /Users/michael/Silver/.env
+  set +a
+  cd /Users/michael/Silver
+  uv run python scripts/admission_steward.py --watch --promote \
+    --max-active 5 --todo-buffer 5 --poll-interval 30
+'
+```
+
+The steward does not build, review, merge, or resolve conflicts. It only admits
+approved, runnable Backlog tickets into `Todo` and records why each candidate
+was promoted, skipped, or left waiting.
+
 ## Merge Steward
 
 Run the merge steward in the Silver repository shell where `LINEAR_API_KEY` is
