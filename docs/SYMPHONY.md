@@ -121,8 +121,11 @@ tmux kill-session -t silver-symphony
 
 Run the merge steward in the Silver repository shell where `LINEAR_API_KEY` is
 available. It reads Linear issues in `Merging`, reconciles stale nonterminal
-project issues whose matching GitHub PR is already merged, queues green PRs,
-marks merged PRs `Done`, and sends conflicts or failed checks to `Rework`.
+project issues whose matching GitHub PR is already merged, classifies Safety
+Review risks from issue text, PR metadata, changed files, and available diffs,
+queues safe green PRs, marks merged PRs `Done`, sends conflicts or failed checks
+to `Rework`, and sends destructive, semantic, paid/live, security, scope-drift,
+or automation-permission exceptions to `Safety Review` with a blocker comment.
 
 Validate local wiring without network writes:
 
@@ -153,7 +156,7 @@ tmux new-session -d -s silver-merge-steward '
 ```
 
 The steward is deterministic on purpose. It does not edit code. It only queues,
-waits, marks `Done`, or routes exceptions to `Rework`.
+waits, marks `Done`, or routes exceptions to `Rework` or `Safety Review`.
 
 ## First Tickets
 
