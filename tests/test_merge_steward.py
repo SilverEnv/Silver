@@ -5,6 +5,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MERGE_STEWARD_SCRIPT = ROOT / "scripts" / "merge_steward.py"
@@ -174,6 +176,210 @@ def test_green_clean_open_pr_is_queued() -> None:
     assert "green" in decision.reason
 
 
+@pytest.mark.parametrize(
+    ("changed_files", "diff", "expected_reason"),
+    (
+        (
+            ("db/migrations/005_drop_predictions.sql",),
+            "+DROP TABLE silver.predictions;",
+            "destructive",
+        ),
+        (
+            ("docs/PIT_DISCIPLINE.md",),
+            "+available_at is now event_at for backfilled facts",
+            "PIT",
+        ),
+        (
+            ("src/silver/features/momentum_12_1.py",),
+            "+return adjusted_close.pct_change(63)",
+            "feature",
+        ),
+        (
+            ("src/silver/labels/forward_returns.py",),
+            "+horizon_days = 42",
+            "label",
+        ),
+        (
+            ("src/silver/backtest/momentum_runner.py",),
+            "+metrics[\"sharpe\"] = gross_return.mean()",
+            "backtest",
+        ),
+        (
+            ("docs/SECURITY.md",),
+            "+FMP_API_KEY may be copied into local test fixtures",
+            "secret",
+        ),
+        (
+            ("src/silver/sources/fmp/client.py",),
+            '+urllib.request.urlopen("https://financialmodelingprep.com/api/v3/quote/AAPL")',
+            "paid/live",
+        ),
+        (
+            ("WORKFLOW.md",),
+            "+active_states: [Todo, In Progress, Rework, Merging]",
+            "automation permission",
+        ),
+    ),
+)
+def test_safety_review_risks_move_to_safety_review(
+    changed_files: tuple[str, ...],
+    diff: str,
+    expected_reason: str,
+) -> None:
+    issue = _issue("ARR-40")
+    pr = _pr(
+        40,
+        title="ARR-40 Risky change",
+        changed_files=_changed_files(*changed_files),
+        diff=diff,
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "move_safety_review"
+    assert decision.pr_number == 40
+    assert expected_reason in decision.reason
+
+
+def test_routine_docs_and_tests_still_queue() -> None:
+    issue = _issue("ARR-41")
+    pr = _pr(
+        41,
+        title="ARR-41 Fix typos and test names",
+        changed_files=_changed_files("README.md", "tests/test_merge_steward.py"),
+        diff="+Fix typo in local runbook prose\n+def test_renamed_case():",
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "queue"
+    assert "green" in decision.reason
+
+
+def test_mechanical_steward_fixes_still_queue() -> None:
+    issue = _issue("ARR-42")
+    pr = _pr(
+        42,
+        title="ARR-42 Format merge steward helper",
+        changed_files=_changed_files("scripts/merge_steward.py"),
+        diff="+    return format_decision(issue, decision, pr)",
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "queue"
+    assert "green" in decision.reason
+
+
+def test_risky_test_fixture_text_does_not_block_mechanical_fix() -> None:
+    issue = _issue("ARR-42")
+    pr = _pr(
+        42,
+        title="ARR-42 Format merge steward helper",
+        changed_files=_changed_files(
+            "scripts/merge_steward.py",
+            "tests/test_merge_steward.py",
+        ),
+        diff=(
+            "diff --git a/tests/test_merge_steward.py b/tests/test_merge_steward.py\n"
+            "+++ b/tests/test_merge_steward.py\n"
+            "@@\n"
+            "+active_states: [Todo, In Progress, Rework, Merging]\n"
+            "diff --git a/scripts/merge_steward.py b/scripts/merge_steward.py\n"
+            "+++ b/scripts/merge_steward.py\n"
+            "@@\n"
+            "+    return format_decision(issue, decision, pr)\n"
+        ),
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "queue"
+    assert "green" in decision.reason
+
+
+def test_do_not_touch_issue_text_routes_scope_drift_to_safety_review() -> None:
+    issue = _issue(
+        "ARR-40",
+        description=(
+            "Do Not Touch:\n\n"
+            "* `scripts/planning_steward.py`\n\n"
+            "Dependencies:\n\n"
+            "* ARR-39\n"
+        ),
+    )
+    pr = _pr(
+        40,
+        title="ARR-40 Touch unrelated steward",
+        changed_files=_changed_files("scripts/planning_steward.py"),
+        diff="+active_states: [Todo, In Progress, Rework]",
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "move_safety_review"
+    assert "scope drift" in decision.reason
+    assert "scripts/planning_steward.py" in decision.reason
+
+
+def test_safety_review_comment_includes_audit_fields() -> None:
+    issue = _issue(
+        "ARR-40",
+        title="Add merge steward Safety Review gate",
+        description="Parent Objective: autonomous-post-todo-operation\n",
+    )
+    pr = _pr(
+        40,
+        title="ARR-40 Add merge steward Safety Review gate",
+        changed_files=_changed_files("docs/PIT_DISCIPLINE.md"),
+        diff="+available_at now follows event_at",
+    )
+    linear = _FakeLinear()
+    github = _FakeGitHub()
+    decision = merge_steward.Decision(
+        "move_safety_review",
+        "PIT rule change: docs/PIT_DISCIPLINE.md",
+        40,
+    )
+
+    merge_steward.apply_decision(
+        issue=issue,
+        pr=pr,
+        decision=decision,
+        linear=linear,
+        github=github,
+    )
+
+    assert len(linear.comments) == 1
+    comment = linear.comments[0][1]
+    assert "Objective: autonomous-post-todo-operation" in comment
+    assert "Ticket: ARR-40 - Add merge steward Safety Review gate" in comment
+    assert "PR: #40 https://github.com/SilverEnv/Silver/pull/40" in comment
+    assert "Trigger: PIT rule change: docs/PIT_DISCIPLINE.md" in comment
+    assert "Allowed next action:" in comment
+    assert linear.state_updates == [("issue-id", "safety-review-id")]
+
+
 def test_merge_queue_pr_waits_without_requeueing() -> None:
     issue = _issue("ARR-27")
     pr = _pr(
@@ -299,17 +505,35 @@ def test_parse_github_repo_handles_https_and_ssh_remotes() -> None:
     )
 
 
-def _issue(identifier: str, *, state: str = "Merging"):
+def _issue(
+    identifier: str,
+    *,
+    state: str = "Merging",
+    title: str = "Test issue",
+    description: str = "",
+):
     return merge_steward.LinearIssue(
         id="issue-id",
         identifier=identifier,
-        title="Test issue",
+        title=title,
         url=f"https://linear.app/arrow1/issue/{identifier.lower()}/test",
+        description=description,
         state=state,
         team_states={
             "Done": merge_steward.LinearState(id="done-id", name="Done"),
             "Rework": merge_steward.LinearState(id="rework-id", name="Rework"),
+            "Safety Review": merge_steward.LinearState(
+                id="safety-review-id",
+                name="Safety Review",
+            ),
         },
+    )
+
+
+def _changed_files(*paths: str):
+    return tuple(
+        merge_steward.ChangedFile(path=path, additions=1, deletions=0)
+        for path in paths
     )
 
 
@@ -326,6 +550,8 @@ def _pr(
     auto_merge_enabled: bool = False,
     in_merge_queue: bool = False,
     checks: tuple[object, ...] | None = None,
+    changed_files: tuple[object, ...] = (),
+    diff: str | None = "",
 ):
     return merge_steward.PullRequest(
         number=number,
@@ -339,6 +565,8 @@ def _pr(
         merge_state_status=merge_state_status,
         auto_merge_enabled=auto_merge_enabled,
         in_merge_queue=in_merge_queue,
+        changed_files=changed_files,
+        diff=diff,
         checks=checks
         or (
             merge_steward.CheckRun(
@@ -375,6 +603,9 @@ class _FakeGitHub:
     def list_pull_requests(self, limit: int):
         assert limit == 100
         return self.pull_requests
+
+    def with_diff(self, pr):
+        return pr
 
     def queue_pull_request(self, number: int) -> None:
         self.queued.append(number)

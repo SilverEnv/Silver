@@ -13,8 +13,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = ROOT / "WORKFLOW.md"
 DEFAULT_REQUIRED_CHECKS = ("Python 3.10 checks",)
 MERGING_STATE = "Merging"
+SAFETY_REVIEW_STATE = "Safety Review"
 TERMINAL_STATE_NAMES = frozenset(("Done", "Canceled", "Duplicate"))
 
 IssueAction = Literal[
@@ -32,6 +33,7 @@ IssueAction = Literal[
     "mark_done",
     "stale_mark_done",
     "move_rework",
+    "move_safety_review",
     "wait",
     "skip",
 ]
@@ -53,6 +55,7 @@ class LinearIssue:
     identifier: str
     title: str
     url: str
+    description: str
     state: str
     team_states: Mapping[str, LinearState]
 
@@ -62,6 +65,13 @@ class CheckRun:
     name: str
     status: str | None
     conclusion: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ChangedFile:
+    path: str
+    additions: int | None
+    deletions: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +87,8 @@ class PullRequest:
     merge_state_status: str | None
     auto_merge_enabled: bool
     in_merge_queue: bool
+    changed_files: tuple[ChangedFile, ...]
+    diff: str | None
     checks: tuple[CheckRun, ...]
 
 
@@ -131,6 +143,7 @@ class LinearClient:
                 identifier
                 title
                 url
+                description
                 state { name }
                 team { id }
               }
@@ -163,6 +176,7 @@ class LinearClient:
                     identifier=node["identifier"],
                     title=node["title"],
                     url=node["url"],
+                    description=str(node.get("description") or ""),
                     state=state,
                     team_states=states_by_team[node["team"]["id"]],
                 )
@@ -237,7 +251,7 @@ class GitHubClient:
             "--json",
             (
                 "number,title,url,state,mergedAt,headRefName,body,isDraft,"
-                "mergeStateStatus,autoMergeRequest,statusCheckRollup"
+                "mergeStateStatus,autoMergeRequest,statusCheckRollup,files"
             ),
         ]
         payload = self.runner.json(command)
@@ -245,6 +259,23 @@ class GitHubClient:
             [int(item["number"]) for item in payload if item["state"] == "OPEN"]
         )
         return tuple(_parse_pull_request(item, queue_map) for item in payload)
+
+    def with_diff(self, pr: PullRequest) -> PullRequest:
+        try:
+            result = self.runner.run(
+                [
+                    "gh",
+                    "pr",
+                    "diff",
+                    str(pr.number),
+                    "--repo",
+                    self.repo,
+                    "--patch",
+                ]
+            )
+        except MergeStewardError:
+            return pr
+        return replace(pr, diff=result.stdout)
 
     def queue_pull_request(self, number: int) -> None:
         self.runner.run(
@@ -444,6 +475,8 @@ def run_once(
     pull_requests = github.list_pull_requests(args.limit)
     for issue in merging_issues:
         pr = choose_pr_for_issue(issue, pull_requests)
+        if pr is not None and pr.state == "OPEN":
+            pr = github.with_diff(pr)
         decision = decide_issue_action(issue, pr, required_checks)
         print(format_decision(issue, decision, pr))
         if args.dry_run:
@@ -513,6 +546,23 @@ def apply_decision(
             ),
         )
         linear.update_issue_state(issue.id, rework_state.id)
+        return
+
+    if decision.action == "move_safety_review":
+        safety_review_state = issue.team_states.get(SAFETY_REVIEW_STATE)
+        if safety_review_state is None:
+            raise MergeStewardError(
+                f"{issue.identifier}: Linear state {SAFETY_REVIEW_STATE} not found"
+            )
+        if pr is None:
+            raise MergeStewardError(
+                f"{issue.identifier}: no PR found for Safety Review"
+            )
+        linear.create_comment(
+            issue.id,
+            build_safety_review_comment(issue=issue, pr=pr, trigger=decision.reason),
+        )
+        linear.update_issue_state(issue.id, safety_review_state.id)
 
 
 def decide_issue_action(
@@ -534,6 +584,10 @@ def decide_issue_action(
 
     if pr.is_draft:
         return Decision("wait", "PR is still draft", pr.number)
+
+    safety_trigger = safety_review_trigger(issue, pr)
+    if safety_trigger is not None:
+        return Decision("move_safety_review", safety_trigger, pr.number)
 
     check_status = required_check_status(pr, required_checks)
     if check_status.action == "move_rework":
@@ -585,6 +639,397 @@ def decide_stale_issue_action(
         "skip",
         f"{issue.identifier}: matching PR is not merged ({pr.state.lower()})",
         pr.number,
+    )
+
+
+def safety_review_trigger(issue: LinearIssue, pr: PullRequest) -> str | None:
+    paths = tuple(
+        normalized
+        for changed_file in pr.changed_files
+        if (normalized := _normalize_path(changed_file.path))
+    )
+    added_diff = _added_diff_text(pr.diff or "")
+    added_diff_by_path = _added_diff_text_by_path(pr.diff or "")
+    pr_metadata = "\n".join((pr.title, pr.head_ref_name, pr.body))
+
+    do_not_touch = _do_not_touch_trigger(issue.description, paths)
+    if do_not_touch is not None:
+        return do_not_touch
+
+    destructive_path = _first_matching_path(paths, _is_db_or_data_path)
+    destructive_diff = _diff_for_path(
+        destructive_path,
+        paths=paths,
+        added_diff=added_diff,
+        added_diff_by_path=added_diff_by_path,
+    )
+    if destructive_path is not None and _matches_any(
+        destructive_diff,
+        (
+            r"\bdrop\s+(table|column|database|schema)\b",
+            r"\btruncate\s+(table\s+)?[a-z_][\w.]*",
+            r"\bdelete\s+from\s+[a-z_][\w.]*",
+            r"\b(drop_table|drop_column|remove_column)\s*\(",
+        ),
+    ):
+        return f"destructive DB/data change: {destructive_path}"
+    if _matches_any(
+        pr_metadata,
+        (
+            r"\bdestructive\b.{0,40}\b(db|database|data|migration)\b",
+            r"\b(drop|delete|truncate)\b.{0,40}\b(table|column|data)\b",
+        ),
+    ):
+        return "destructive DB/data change: PR metadata"
+
+    pit_path = _first_matching_path(paths, _is_pit_rule_path)
+    if pit_path is not None:
+        return f"PIT rule change: {pit_path}"
+    if _matches_any(
+        pr_metadata,
+        (
+            r"\b(change|relax|remove|bypass|rewrite|alter)\b.{0,40}"
+            r"\b(available_at|point-in-time|pit|asof_date|lookahead)\b",
+        ),
+    ):
+        return "PIT rule change: PR metadata"
+
+    feature_path = _first_matching_path(paths, _is_feature_semantics_path)
+    feature_diff = _diff_for_path(
+        feature_path,
+        paths=paths,
+        added_diff=added_diff,
+        added_diff_by_path=added_diff_by_path,
+    )
+    if feature_path is not None and _semantic_diff_or_metadata(
+        feature_diff,
+        pr_metadata,
+        (
+            r"\bfeature(_definition)?\b",
+            r"\blookback\b",
+            r"\bwindow\b",
+            r"\bpct_change\b",
+            r"\brolling\b",
+            r"\bmomentum\b",
+            r"\bvolatility\b",
+            r"\bdollar_volume\b",
+            r"\breturn\b",
+            r"\bmodel_version\b",
+            r"\bprompt_version\b",
+        ),
+    ):
+        return f"feature semantic change: {feature_path}"
+
+    label_path = _first_matching_path(paths, _is_label_semantics_path)
+    label_diff = _diff_for_path(
+        label_path,
+        paths=paths,
+        added_diff=added_diff,
+        added_diff_by_path=added_diff_by_path,
+    )
+    if label_path is not None and _semantic_diff_or_metadata(
+        label_diff,
+        pr_metadata,
+        (
+            r"\blabel\b",
+            r"\bhorizon\b",
+            r"\bhorizon_days\b",
+            r"\bforward_return\b",
+            r"\bexcess_return\b",
+            r"\bcorporate_action\b",
+            r"\bavailable_at\b",
+        ),
+    ):
+        return f"label semantic change: {label_path}"
+
+    backtest_path = _first_matching_path(paths, _is_backtest_semantics_path)
+    backtest_diff = _diff_for_path(
+        backtest_path,
+        paths=paths,
+        added_diff=added_diff,
+        added_diff_by_path=added_diff_by_path,
+    )
+    if backtest_path is not None and _semantic_diff_or_metadata(
+        backtest_diff,
+        pr_metadata,
+        (
+            r"\bmetric(s)?\b",
+            r"\bsharpe\b",
+            r"\bdrawdown\b",
+            r"\bcost(s)?\b",
+            r"\bturnover\b",
+            r"\bbaseline\b",
+            r"\breproducib",
+            r"\bmodel_run\b",
+            r"\bportfolio\b",
+            r"\bgross\b",
+            r"\bnet\b",
+            r"\bscramble\b",
+        ),
+    ):
+        return f"backtest metric semantic change: {backtest_path}"
+
+    secret_path = _first_matching_path(paths, _is_secret_handling_path)
+    if secret_path is not None:
+        return f"secret handling change: {secret_path}"
+    if _matches_any(
+        pr_metadata,
+        (
+            r"\b(secret|credential|api[_ -]?key|token)\b",
+            r"\b(linear_api_key|fmp_api_key)\b",
+        ),
+    ):
+        return "secret handling change: PR metadata"
+
+    external_path = _first_matching_path(paths, _is_external_call_path)
+    external_diff = _diff_for_path(
+        external_path,
+        paths=paths,
+        added_diff=added_diff,
+        added_diff_by_path=added_diff_by_path,
+    )
+    if external_path is not None and _matches_any(
+        "\n".join((external_diff, pr_metadata)),
+        (
+            r"\b(urllib\.request\.urlopen|requests\.|httpx\.|aiohttp\.)",
+            r"https?://",
+            r"\b(fmp|financialmodelingprep)\b",
+            r"\b(paid|billing|live)\b.{0,40}\b(call|request|service|api)\b",
+        ),
+    ):
+        return f"paid/live external call change: {external_path}"
+
+    automation_path = _first_matching_path(paths, _is_automation_surface_path)
+    automation_diff = _diff_for_path(
+        automation_path,
+        paths=paths,
+        added_diff=added_diff,
+        added_diff_by_path=added_diff_by_path,
+    )
+    if automation_path is not None and _matches_any(
+        "\n".join((automation_diff, pr_metadata)),
+        (
+            r"\bactive_states\s*:[^\n]*(merging|safety review)\b",
+            r"\bpermissions\s*:[^\n]*write-all\b",
+            r"(?<!\S)--admin(?!\S)",
+            r"\bforce[- ]?push\b",
+            r"\bskip\b.{0,30}\brequired checks\b",
+            r"\bbypass\b.{0,30}\b(checks|review|queue|safety)\b",
+        ),
+    ):
+        return f"automation permission expansion: {automation_path}"
+
+    return None
+
+
+def build_safety_review_comment(
+    *,
+    issue: LinearIssue,
+    pr: PullRequest,
+    trigger: str,
+) -> str:
+    objective = parent_objective(issue.description)
+    return (
+        "## Safety Review Blocker\n\n"
+        f"Objective: {objective or 'Not specified'}\n"
+        f"Ticket: {issue.identifier} - {issue.title}\n"
+        f"PR: #{pr.number} {pr.url}\n"
+        f"Trigger: {trigger}\n\n"
+        "Allowed next action: Michael reviews the exception. If the risk is "
+        "explicitly accepted, move the issue back to `Merging`; otherwise move "
+        "it to `Rework` with the requested repair. The merge steward must not "
+        "queue this PR while it is in `Safety Review`."
+    )
+
+
+def parent_objective(description: str) -> str:
+    match = re.search(r"(?im)^Parent Objective:\s*(?P<objective>.+?)\s*$", description)
+    if match is None:
+        return ""
+    return match.group("objective").strip()
+
+
+def _do_not_touch_trigger(description: str, paths: Sequence[str]) -> str | None:
+    section = _markdown_section(description, "Do Not Touch")
+    if not section:
+        return None
+
+    for protected_path in re.findall(r"`([^`]+)`", section):
+        normalized = _normalize_path(protected_path)
+        if normalized and any(_path_matches(path, normalized) for path in paths):
+            return f"ticket scope drift: changed Do Not Touch path {protected_path}"
+
+    lowered = section.lower()
+    if "database schema" in lowered or "migrations" in lowered:
+        path = _first_matching_path(paths, _is_db_or_data_path)
+        if path is not None:
+            return f"ticket scope drift: changed Do Not Touch database path {path}"
+    if "secret" in lowered or "credential" in lowered:
+        path = _first_matching_path(paths, _is_secret_handling_path)
+        if path is not None:
+            return f"ticket scope drift: changed Do Not Touch secret path {path}"
+
+    return None
+
+
+def _markdown_section(markdown: str, heading: str) -> str:
+    pattern = (
+        rf"(?ims)^(?:#+\s*)?{re.escape(heading)}\s*:?\s*$"
+        rf"(?P<section>.*?)(?=^(?:#+\s*)?[A-Z][A-Za-z0-9 /`-]+:\s*$|\Z)"
+    )
+    match = re.search(pattern, markdown)
+    if match is None:
+        return ""
+    return match.group("section").strip()
+
+
+def _normalize_path(path: str) -> str:
+    normalized = path.strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.lower()
+
+
+def _path_matches(path: str, protected_path: str) -> bool:
+    protected = protected_path.rstrip("/")
+    return path == protected or path.startswith(f"{protected}/")
+
+
+def _first_matching_path(
+    paths: Sequence[str],
+    predicate: "Callable[[str], bool]",
+) -> str | None:
+    for path in paths:
+        if predicate(path):
+            return path
+    return None
+
+
+def _added_diff_text(diff: str) -> str:
+    lines: list[str] = []
+    for line in diff.splitlines():
+        if line.startswith("+++") or not line.startswith("+"):
+            continue
+        lines.append(line[1:])
+    return "\n".join(lines)
+
+
+def _added_diff_text_by_path(diff: str) -> Mapping[str, str]:
+    lines_by_path: dict[str, list[str]] = {}
+    current_path = ""
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            match = re.match(r"diff --git a/(.*?) b/(?P<path>.+)$", line)
+            current_path = _normalize_path(match.group("path")) if match else ""
+            continue
+        if line.startswith("+++ b/"):
+            current_path = _normalize_path(line.removeprefix("+++ b/"))
+            continue
+        if not current_path or line.startswith("+++") or not line.startswith("+"):
+            continue
+        lines_by_path.setdefault(current_path, []).append(line[1:])
+    return {path: "\n".join(lines) for path, lines in lines_by_path.items()}
+
+
+def _diff_for_path(
+    path: str | None,
+    *,
+    paths: Sequence[str],
+    added_diff: str,
+    added_diff_by_path: Mapping[str, str],
+) -> str:
+    if path is None:
+        return ""
+    path_diff = added_diff_by_path.get(path)
+    if path_diff is not None:
+        return path_diff
+    if not added_diff_by_path or len(paths) == 1:
+        return added_diff
+    return ""
+
+
+def _matches_any(text: str, patterns: Sequence[str]) -> bool:
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _semantic_diff_or_metadata(
+    added_diff: str,
+    pr_metadata: str,
+    patterns: Sequence[str],
+) -> bool:
+    if not added_diff:
+        return True
+    return _matches_any("\n".join((added_diff, pr_metadata)), patterns)
+
+
+def _is_db_or_data_path(path: str) -> bool:
+    return (
+        path.startswith("db/")
+        or path.endswith(".sql")
+        or path.startswith("data/")
+        or path.startswith("scripts/apply_migrations.py")
+        or path.startswith("scripts/bootstrap_database.py")
+        or path.startswith("scripts/seed_")
+    )
+
+
+def _is_pit_rule_path(path: str) -> bool:
+    return path in {
+        "docs/pit_discipline.md",
+        "config/available_at_policies.yaml",
+        "src/silver/time/available_at_policies.py",
+        "scripts/seed_available_at_policies.py",
+    }
+
+
+def _is_feature_semantics_path(path: str) -> bool:
+    return path.startswith("src/silver/features/")
+
+
+def _is_label_semantics_path(path: str) -> bool:
+    return path.startswith("src/silver/labels/")
+
+
+def _is_backtest_semantics_path(path: str) -> bool:
+    return (
+        path.startswith("src/silver/backtest/")
+        or path.startswith("src/silver/reports/")
+        or path.startswith("src/silver/analytics/")
+        or path in {
+            "scripts/run_falsifier.py",
+            "scripts/check_falsifier_inputs.py",
+        }
+    )
+
+
+def _is_secret_handling_path(path: str) -> bool:
+    name = Path(path).name
+    return (
+        path in {".env", ".env.example", "docs/security.md"}
+        or "secret" in path
+        or "credential" in path
+        or name.endswith(".key")
+    )
+
+
+def _is_external_call_path(path: str) -> bool:
+    return (
+        path.startswith("src/silver/sources/")
+        or path.startswith("src/silver/ingest/")
+        or path.startswith("scripts/ingest_")
+        or path == "scripts/run_phase1_pipeline.py"
+    )
+
+
+def _is_automation_surface_path(path: str) -> bool:
+    return (
+        path == "workflow.md"
+        or path.startswith(".github/workflows/")
+        or path in {
+            "docs/symphony.md",
+            "scripts/merge_steward.py",
+            "scripts/planning_steward.py",
+        }
     )
 
 
@@ -738,6 +1183,11 @@ def _parse_pull_request(
     queue_map: Mapping[int, bool],
 ) -> PullRequest:
     number = int(item["number"])
+    changed_files = tuple(
+        changed_file
+        for file_item in item.get("files") or ()
+        if (changed_file := _parse_changed_file(file_item)) is not None
+    )
     checks = tuple(
         CheckRun(
             name=str(check.get("name", "")),
@@ -759,8 +1209,36 @@ def _parse_pull_request(
         merge_state_status=item.get("mergeStateStatus"),
         auto_merge_enabled=item.get("autoMergeRequest") is not None,
         in_merge_queue=bool(queue_map.get(number, False)),
+        changed_files=changed_files,
+        diff=None,
         checks=checks,
     )
+
+
+def _parse_changed_file(item: object) -> ChangedFile | None:
+    if isinstance(item, str):
+        path = item
+        additions = None
+        deletions = None
+    elif isinstance(item, Mapping):
+        path = str(item.get("path") or item.get("filename") or "")
+        additions = _optional_int(item.get("additions"))
+        deletions = _optional_int(item.get("deletions"))
+    else:
+        return None
+
+    if not path:
+        return None
+    return ChangedFile(path=path, additions=additions, deletions=deletions)
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 if __name__ == "__main__":
