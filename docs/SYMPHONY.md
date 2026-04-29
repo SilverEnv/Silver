@@ -3,6 +3,10 @@
 Silver is prepared to be run by the local Symphony checkout at
 `/Users/michael/symphony`.
 
+This file is the local setup and runbook. For Silver's operating policy on top
+of Symphony, including Objectives, ticket flow, migration coordination, and
+conflict handling, see [`Symphony-Operation.md`](Symphony-Operation.md).
+
 ## Prerequisites
 
 - The Silver repository must be pushed to GitHub so Symphony can clone it.
@@ -61,6 +65,9 @@ Every ticket moved to `Human Review` should have a Linear comment headed
 `## Proof Packet` containing:
 
 - PR link.
+- Parent Objective, when the ticket belongs to one.
+- Objective Impact: 1-2 user-facing sentences explaining how this ticket moves
+  the parent Objective forward.
 - Changed files summary.
 - Acceptance criteria status.
 - Validation commands run and outcome.
