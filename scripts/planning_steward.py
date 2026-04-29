@@ -20,6 +20,32 @@ OBJECTIVE_ACTIVE_DIR = Path("docs/objectives/active")
 OBJECTIVE_COMPLETED_DIR = Path("docs/objectives/completed")
 
 OutputFormat = Literal["markdown", "json"]
+ObjectiveSourceKind = Literal["objective_file", "repo_heuristic"]
+
+OBJECTIVE_REQUIRED_SECTIONS = (
+    "Objective",
+    "User Value",
+    "Why Now",
+    "Done When",
+    "Out Of Scope",
+    "Guardrails",
+    "Expected Tickets",
+    "Validation",
+    "Conflict Zones",
+)
+
+TICKET_FIELD_ALIASES = {
+    "title": "title",
+    "purpose": "purpose",
+    "objective impact": "objective_impact",
+    "technical summary": "technical_summary",
+    "owns": "owns",
+    "do not touch": "do_not_touch",
+    "dependencies": "dependencies",
+    "conflict zones": "conflict_zones",
+    "validation": "validation",
+    "validation required": "validation",
+}
 
 
 class PlanningStewardError(RuntimeError):
@@ -30,6 +56,13 @@ class PlanningStewardError(RuntimeError):
 class RepoSignal:
     name: str
     value: str
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectiveSource:
+    kind: ObjectiveSourceKind
+    objective_id: str
+    path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +81,7 @@ class TicketProposal:
 @dataclass(frozen=True, slots=True)
 class ObjectiveProposal:
     objective_id: str
+    source: ObjectiveSource
     objective: str
     user_value: str
     why_now: str
@@ -65,6 +99,7 @@ class ObjectiveProposal:
 class PlanningContext:
     root: Path
     active_plan_files: tuple[Path, ...]
+    active_objective_files: tuple[Path, ...]
     unchecked_plan_items: tuple[str, ...]
     migration_files: tuple[Path, ...]
     next_migration_number: int | None
@@ -166,6 +201,12 @@ def collect_context(root: Path = ROOT) -> PlanningContext:
             for path in (repo_root / ACTIVE_PLAN_DIR).glob("*.md")
         )
     )
+    active_objective_files = tuple(
+        sorted(
+            path.relative_to(repo_root)
+            for path in (repo_root / OBJECTIVE_ACTIVE_DIR).glob("*.md")
+        )
+    )
     unchecked_plan_items = tuple(
         item
         for plan_path in active_plan_files
@@ -192,6 +233,7 @@ def collect_context(root: Path = ROOT) -> PlanningContext:
     return PlanningContext(
         root=repo_root,
         active_plan_files=active_plan_files,
+        active_objective_files=active_objective_files,
         unchecked_plan_items=unchecked_plan_items,
         migration_files=migration_files,
         next_migration_number=next_migration_number,
@@ -226,6 +268,7 @@ def build_signals(context: PlanningContext) -> tuple[RepoSignal, ...]:
         RepoSignal("Branch", context.git_branch or "unknown"),
         RepoSignal("Dirty worktree", "yes" if context.git_dirty else "no"),
         RepoSignal("Active plan files", str(len(context.active_plan_files))),
+        RepoSignal("Active Objective files", str(len(context.active_objective_files))),
         RepoSignal("Unchecked active-plan items", str(len(context.unchecked_plan_items))),
         RepoSignal("Migration files", str(len(context.migration_files))),
         RepoSignal(
@@ -256,6 +299,7 @@ def build_objective_proposals(
 ) -> tuple[ObjectiveProposal, ...]:
     """Return prioritized Objective proposals supported by local evidence."""
     proposals: list[ObjectiveProposal] = []
+    proposals.extend(_objective_file_proposals(context))
     if (
         context.has_backtest_metadata_migration
         and not context.has_backtest_metadata_code_writes
@@ -269,6 +313,325 @@ def build_objective_proposals(
         proposals.append(_linear_ticket_factory_objective(context))
 
     return tuple(_dedupe_objectives(proposals))
+
+
+def _objective_file_proposals(
+    context: PlanningContext,
+) -> tuple[ObjectiveProposal, ...]:
+    return tuple(
+        _objective_file_proposal(context.root, objective_path)
+        for objective_path in context.active_objective_files
+    )
+
+
+def _objective_file_proposal(root: Path, objective_path: Path) -> ObjectiveProposal:
+    absolute_path = root / objective_path
+    sections = _parse_objective_sections(
+        absolute_path.read_text(encoding="utf-8"),
+    )
+    missing_sections = tuple(
+        section
+        for section in OBJECTIVE_REQUIRED_SECTIONS
+        if not _section_has_content(sections.get(section, ()))
+    )
+    if missing_sections:
+        raise PlanningStewardError(
+            f"{objective_path.as_posix()} missing required Objective section(s): "
+            + ", ".join(missing_sections)
+        )
+
+    objective_id = objective_path.stem
+    objective = _section_paragraph(sections["Objective"])
+    user_value = _section_paragraph(sections["User Value"])
+    validation = _section_items(sections["Validation"])
+    conflict_zones = _section_items(sections["Conflict Zones"])
+    expected_tickets = _parse_expected_tickets(
+        sections["Expected Tickets"],
+        objective=objective,
+        objective_id=objective_id,
+        source_path=objective_path.as_posix(),
+        user_value=user_value,
+        default_conflict_zones=conflict_zones,
+        default_validation=validation,
+    )
+    if not expected_tickets:
+        raise PlanningStewardError(
+            f"{objective_path.as_posix()} must define at least one Expected Ticket"
+        )
+
+    return ObjectiveProposal(
+        objective_id=objective_id,
+        source=ObjectiveSource(
+            kind="objective_file",
+            objective_id=objective_id,
+            path=objective_path.as_posix(),
+        ),
+        objective=objective,
+        user_value=user_value,
+        why_now=_section_paragraph(sections["Why Now"]),
+        done_when=_section_items(sections["Done When"]),
+        out_of_scope=_section_items(sections["Out Of Scope"]),
+        guardrails=_section_items(sections["Guardrails"]),
+        expected_tickets=expected_tickets,
+        validation=validation,
+        conflict_zones=conflict_zones,
+        migration_lane=(
+            "No steward-side migration reservation; follow the approved "
+            "Objective file and ticket dependencies."
+        ),
+        evidence=(
+            f"Approved active Objective file: {objective_path.as_posix()}",
+            f"Expected ticket slices: {len(expected_tickets)}",
+        ),
+    )
+
+
+def _parse_objective_sections(text: str) -> dict[str, tuple[str, ...]]:
+    section_by_key = {
+        _normalized_heading(section): section
+        for section in OBJECTIVE_REQUIRED_SECTIONS
+    }
+    sections: dict[str, list[str]] = {}
+    current_section: str | None = None
+    for line in text.splitlines():
+        heading = _objective_section_heading(line)
+        if heading is not None:
+            section = section_by_key.get(_normalized_heading(heading))
+            if section is not None:
+                current_section = section
+                sections.setdefault(current_section, [])
+                continue
+        if current_section is not None:
+            sections[current_section].append(line.rstrip())
+    return {
+        section: tuple(lines)
+        for section, lines in sections.items()
+    }
+
+
+def _objective_section_heading(line: str) -> str | None:
+    if line.startswith((" ", "\t")):
+        return None
+    stripped = line.strip()
+    markdown_match = re.match(r"^#{1,2}\s+(.+?)\s*:?\s*$", stripped)
+    if markdown_match is not None:
+        return markdown_match.group(1)
+    label_match = re.match(r"^([A-Za-z][A-Za-z0-9 /_-]+):\s*$", stripped)
+    if label_match is not None:
+        return label_match.group(1)
+    return None
+
+
+def _normalized_heading(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
+
+
+def _section_has_content(lines: Sequence[str] | None) -> bool:
+    if lines is None:
+        return False
+    return any(line.strip() for line in lines)
+
+
+def _section_paragraph(lines: Sequence[str]) -> str:
+    return " ".join(line.strip() for line in lines if line.strip())
+
+
+def _section_items(lines: Sequence[str]) -> tuple[str, ...]:
+    items: list[str] = []
+    current_item: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        item_match = re.match(r"^(?:[-*]|\d+\.)\s+(.+?)\s*$", stripped)
+        if item_match is not None:
+            if current_item:
+                items.append(_clean_list_item(" ".join(current_item)))
+            current_item = [_clean_list_item(item_match.group(1).strip())]
+            continue
+        if current_item:
+            current_item.append(stripped)
+        else:
+            current_item = [stripped]
+    if current_item:
+        items.append(_clean_list_item(" ".join(current_item)))
+    return tuple(items)
+
+
+def _clean_list_item(value: str) -> str:
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped.startswith("`") and stripped.endswith("`"):
+        return stripped[1:-1]
+    return stripped
+
+
+def _parse_expected_tickets(
+    lines: Sequence[str],
+    *,
+    objective: str,
+    objective_id: str,
+    source_path: str,
+    user_value: str,
+    default_conflict_zones: Sequence[str],
+    default_validation: Sequence[str],
+) -> tuple[TicketProposal, ...]:
+    blocks: list[tuple[str, tuple[str, ...]]] = []
+    current_title: str | None = None
+    current_lines: list[str] = []
+
+    for line in lines:
+        if not line.strip():
+            continue
+        top_level_item = re.match(r"^(?:[-*]|\d+\.)\s+(.+?)\s*$", line)
+        ticket_heading = re.match(r"^#{3,6}\s+(.+?)\s*$", line.strip())
+        if top_level_item is not None or ticket_heading is not None:
+            if current_title is not None:
+                blocks.append((current_title, tuple(current_lines)))
+            current_title = (
+                top_level_item.group(1)
+                if top_level_item is not None
+                else ticket_heading.group(1)
+            ).strip()
+            current_lines = []
+            continue
+        if current_title is None:
+            current_title = line.strip()
+            current_lines = []
+            continue
+        current_lines.append(line)
+
+    if current_title is not None:
+        blocks.append((current_title, tuple(current_lines)))
+
+    return tuple(
+        _ticket_from_objective_block(
+            title,
+            block_lines,
+            objective=objective,
+            objective_id=objective_id,
+            source_path=source_path,
+            user_value=user_value,
+            default_conflict_zones=default_conflict_zones,
+            default_validation=default_validation,
+        )
+        for title, block_lines in blocks
+    )
+
+
+def _ticket_from_objective_block(
+    title: str,
+    lines: Sequence[str],
+    *,
+    objective: str,
+    objective_id: str,
+    source_path: str,
+    user_value: str,
+    default_conflict_zones: Sequence[str],
+    default_validation: Sequence[str],
+) -> TicketProposal:
+    fields = _parse_ticket_fields(lines)
+    title_continuation = _ticket_title_continuation(lines)
+    parsed_title = _field_paragraph(fields.get("title", ()))
+    title = parsed_title or _strip_title_label(
+        " ".join((title, *title_continuation))
+    )
+    purpose = _field_paragraph(fields.get("purpose", ())) or (
+        f"Complete the approved Objective ticket slice: {title}"
+    )
+    objective_impact = _field_paragraph(fields.get("objective_impact", ())) or (
+        f"This advances `{objective_id}` by turning the approved Objective "
+        f"into the concrete slice: {_sentence(title)} User value preserved from the "
+        f"Objective: {user_value}"
+    )
+    technical_summary = _field_paragraph(fields.get("technical_summary", ())) or (
+        f"Implement the \"{title}\" slice from `{source_path}` for Objective "
+        f"`{objective_id}`: {objective}"
+    )
+    conflict_zones = (
+        _section_items(fields.get("conflict_zones", ()))
+        or tuple(default_conflict_zones)
+    )
+    validation = (
+        _section_items(fields.get("validation", ()))
+        or tuple(default_validation)
+    )
+    owns = _section_items(fields.get("owns", ())) or tuple(default_conflict_zones)
+    return TicketProposal(
+        title=title,
+        purpose=purpose,
+        objective_impact=objective_impact,
+        technical_summary=technical_summary,
+        owns=owns,
+        do_not_touch=_section_items(fields.get("do_not_touch", ())),
+        dependencies=_section_items(fields.get("dependencies", ())),
+        conflict_zones=conflict_zones,
+        validation=validation,
+    )
+
+
+def _ticket_title_continuation(lines: Sequence[str]) -> tuple[str, ...]:
+    continuation: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        field_match = re.match(r"^([A-Za-z][A-Za-z0-9 /_-]+):\s*(.*)$", stripped)
+        if (
+            field_match is not None
+            and _normalized_heading(field_match.group(1)) in TICKET_FIELD_ALIASES
+        ):
+            break
+        continuation.append(stripped)
+    return tuple(continuation)
+
+
+def _parse_ticket_fields(lines: Sequence[str]) -> dict[str, tuple[str, ...]]:
+    fields: dict[str, list[str]] = {}
+    current_field: str | None = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        field_match = re.match(r"^([A-Za-z][A-Za-z0-9 /_-]+):\s*(.*)$", stripped)
+        if field_match is not None:
+            field = TICKET_FIELD_ALIASES.get(
+                _normalized_heading(field_match.group(1))
+            )
+            if field is not None:
+                current_field = field
+                fields.setdefault(current_field, [])
+                remainder = field_match.group(2).strip()
+                if remainder:
+                    fields[current_field].append(remainder)
+                continue
+        if current_field is not None:
+            fields[current_field].append(stripped)
+    return {
+        field: tuple(values)
+        for field, values in fields.items()
+    }
+
+
+def _field_paragraph(lines: Sequence[str]) -> str:
+    return " ".join(
+        re.sub(r"^(?:[-*]|\d+\.)\s+", "", line).strip()
+        for line in lines
+        if line.strip()
+    )
+
+
+def _strip_title_label(title: str) -> str:
+    match = re.match(r"^title:\s*(.+?)\s*$", title, flags=re.IGNORECASE)
+    if match is not None:
+        return match.group(1)
+    return title
+
+
+def _sentence(value: str) -> str:
+    stripped = value.strip()
+    if stripped.endswith((".", "?", "!")):
+        return stripped
+    return f"{stripped}."
 
 
 def render_proposal(
@@ -297,6 +660,10 @@ def _run_check(proposal: PlanningProposal) -> None:
 def _backtest_metadata_objective(context: PlanningContext) -> ObjectiveProposal:
     return ObjectiveProposal(
         objective_id="wire-backtest-metadata-registry",
+        source=ObjectiveSource(
+            kind="repo_heuristic",
+            objective_id="wire-backtest-metadata-registry",
+        ),
         objective="Wire durable backtest metadata into the falsifier run path.",
         user_value=(
             "Michael can trust that falsifier reports are backed by persisted "
@@ -408,6 +775,10 @@ def _backtest_metadata_objective(context: PlanningContext) -> ObjectiveProposal:
 def _objective_store_objective(context: PlanningContext) -> ObjectiveProposal:
     return ObjectiveProposal(
         objective_id="create-objective-store",
+        source=ObjectiveSource(
+            kind="repo_heuristic",
+            objective_id="create-objective-store",
+        ),
         objective="Create the Objective store and seed the first active Objectives.",
         user_value=(
             "Michael can review coherent build chunks from files before tickets "
@@ -485,6 +856,10 @@ def _phase1_plan_reconciliation_objective(
     evidence = tuple(f"Unchecked plan item: {item}" for item in sample_items)
     return ObjectiveProposal(
         objective_id="reconcile-phase-1-plan-state",
+        source=ObjectiveSource(
+            kind="repo_heuristic",
+            objective_id="reconcile-phase-1-plan-state",
+        ),
         objective="Reconcile Phase 1 plan status with the current repository.",
         user_value=(
             "Michael can see what Phase 1 truly still needs instead of reading "
@@ -561,6 +936,10 @@ def _phase1_plan_reconciliation_objective(
 def _linear_ticket_factory_objective(context: PlanningContext) -> ObjectiveProposal:
     return ObjectiveProposal(
         objective_id="add-linear-backlog-ticket-factory",
+        source=ObjectiveSource(
+            kind="repo_heuristic",
+            objective_id="add-linear-backlog-ticket-factory",
+        ),
         objective="Create guarded Backlog ticket creation from approved Objectives.",
         user_value=(
             "Michael can approve an Objective once and let the system create "
@@ -662,6 +1041,7 @@ def _objective_markdown(index: int, objective: ObjectiveProposal) -> list[str]:
         f"### {index}. {objective.objective}",
         "",
         f"Objective ID: `{objective.objective_id}`",
+        f"Source: {_source_markdown(objective.source)}",
         "",
         "**User Value**",
         "",
@@ -738,6 +1118,7 @@ def _proposal_dict(proposal: PlanningProposal) -> dict[str, object]:
 def _objective_dict(objective: ObjectiveProposal) -> dict[str, object]:
     return {
         "objective_id": objective.objective_id,
+        "source": _source_dict(objective.source),
         "objective": objective.objective,
         "user_value": objective.user_value,
         "why_now": objective.why_now,
@@ -750,6 +1131,20 @@ def _objective_dict(objective: ObjectiveProposal) -> dict[str, object]:
         "migration_lane": objective.migration_lane,
         "evidence": list(objective.evidence),
     }
+
+
+def _source_dict(source: ObjectiveSource) -> dict[str, object]:
+    return {
+        "type": source.kind,
+        "objective_id": source.objective_id,
+        "path": source.path,
+    }
+
+
+def _source_markdown(source: ObjectiveSource) -> str:
+    if source.kind == "objective_file" and source.path:
+        return f"`{source.path}` (approved Objective file)"
+    return "repo heuristic"
 
 
 def _ticket_dict(ticket: TicketProposal) -> dict[str, object]:
