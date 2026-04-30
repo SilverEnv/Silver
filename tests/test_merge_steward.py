@@ -305,6 +305,7 @@ def test_planned_contract_docs_only_security_hardening_queues() -> None:
             "diff --git a/docs/SECURITY.md b/docs/SECURITY.md\n"
             "+++ b/docs/SECURITY.md\n"
             "+FMP raw-vault request metadata must redact API keys before persistence.\n"
+            "+Sanitized vendor errors may be logged with secrets redacted.\n"
             "diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md\n"
             "+++ b/docs/ARCHITECTURE.md\n"
             "+Failed vendor responses are persisted before parsing or raising.\n"

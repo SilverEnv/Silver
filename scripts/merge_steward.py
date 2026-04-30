@@ -1128,19 +1128,25 @@ def secret_relaxation_signal(diff: str) -> bool:
             line,
             (
                 r"\b(may|can|allow|allowed|optional)\b.{0,80}"
-                r"\b(copy|copied|expose|exposed|log|logged|store|stored|"
+                r"\b(copy|copied|expose|exposed|store|stored|"
                 r"persist|persisted|write|written|commit|committed)\b",
-                r"\b(copy|copied|expose|exposed|log|logged|store|stored|"
+                r"\b(copy|copied|expose|exposed|store|stored|"
                 r"persist|persisted|write|written|commit|committed)\b.{0,80}"
                 r"\b(may|can|allow|allowed|optional)\b",
-                r"\b(copy|copied|expose|exposed|log|logged|store|stored|"
-                r"persist|persisted|write|written|commit|committed)\b.{0,80}"
-                r"\b(secret|credential|api[_ -]?keys?|token)\b",
             ),
         ):
             return True
         if _line_hardens_secret_handling(line):
             continue
+        if _matches_any(
+            line,
+            (
+                r"\b(copy|copied|expose|exposed|log|logged|store|stored|"
+                r"persist|persisted|write|written|commit|committed)\b.{0,80}"
+                r"\b(secrets?|credentials?|api[_ -]?keys?|tokens?)\b",
+            ),
+        ):
+            return True
     return False
 
 
@@ -1148,7 +1154,7 @@ def _line_mentions_secret(line: str) -> bool:
     return _matches_any(
         line,
         (
-            r"\b(secret|credential|api[_ -]?keys?|token)\b",
+            r"\b(secrets?|credentials?|api[_ -]?keys?|tokens?)\b",
             r"\b(linear_api_key|fmp_api_key)\b",
         ),
     )
@@ -1161,15 +1167,15 @@ def _line_hardens_secret_handling(line: str) -> bool:
         line,
         (
             r"\b(redact|redacted|mask|masked|scrub|scrubbed|omit|omitted|"
-            r"exclude|excluded|remove|removed|strip|stripped)\b.{0,80}"
-            r"\b(secret|credential|api[_ -]?keys?|token|linear_api_key|fmp_api_key)\b",
-            r"\b(secret|credential|api[_ -]?keys?|token|linear_api_key|fmp_api_key)"
+            r"exclude|excluded|remove|removed|replace|replaced|strip|stripped)\b.{0,80}"
+            r"\b(secrets?|credentials?|api[_ -]?keys?|tokens?|linear_api_key|fmp_api_key)\b",
+            r"\b(secrets?|credentials?|api[_ -]?keys?|tokens?|linear_api_key|fmp_api_key)"
             r"\b.{0,80}\b(redact|redacted|mask|masked|scrub|scrubbed|omit|"
-            r"omitted|exclude|excluded|remove|removed|strip|stripped)\b",
+            r"omitted|exclude|excluded|remove|removed|replace|replaced|strip|stripped)\b",
             r"\b(do not|does not|must not|never|without|no)\b.{0,80}"
             r"\b(log|store|persist|write|commit|expose|copy)\b.{0,80}"
-            r"\b(secret|credential|api[_ -]?keys?|token|linear_api_key|fmp_api_key)\b",
-            r"\b(secret|credential|api[_ -]?keys?|token|linear_api_key|fmp_api_key)"
+            r"\b(secrets?|credentials?|api[_ -]?keys?|tokens?|linear_api_key|fmp_api_key)\b",
+            r"\b(secrets?|credentials?|api[_ -]?keys?|tokens?|linear_api_key|fmp_api_key)"
             r"\b.{0,80}"
             r"\b(do not|does not|must not|never|without|no)\b.{0,80}"
             r"\b(log|store|persist|write|commit|expose|copy)\b",
