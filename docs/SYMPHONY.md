@@ -194,48 +194,65 @@ becomes the source of truth.
 The portable controller command is:
 
 ```bash
-python scripts/objective_run.py
+uv run python scripts/objective_run.py
 ```
 
-Default mode is dry-run. It shows the controller cycle without writing:
+Default mode is dry-run. It runs the same preflight and controller cycle without
+writing. Quiet output is the default; use `--verbose` when diagnosing command
+arguments or subprocess output.
 
 ```text
+required environment/auth preflight
 observe Linear/Symphony runner state
 import approved Objective files into the ledger
 admit runnable DAG tickets
+run VCS/safety policy in dry-run before dispatch
 mirror runnable tickets to Linear for Symphony
 reconcile GitHub PR state into the ledger
 write repair packets for Rework tickets
 plan bounded repair work
 queue/mark safe Merging PRs through the merge steward
 mirror final ledger state back to Linear
-print ledger status
+write one final objective proof packet in apply mode
 ```
 
-Apply one cycle after the preview is correct:
+Normal apply mode is the bounded watch path configured in
+`config/agentic_build.yaml`. It preflights `DATABASE_URL`, `FMP_API_KEY`,
+`LINEAR_API_KEY`, `gh`, and `gh auth status`, then cycles until blocked,
+complete, or `max_cycles` is reached:
 
 ```bash
 set -a
 source .env
 set +a
-python scripts/objective_run.py --apply
+uv run python scripts/objective_run.py --apply
 ```
 
-Keep the controller cycling while Symphony agents and GitHub PRs are moving:
+The explicit daemon spelling is equivalent and useful in scripts:
 
 ```bash
-python scripts/objective_run.py --apply --watch --max-cycles 20 --poll-interval 60
+uv run python scripts/objective_run.py --apply --daemon
 ```
 
 The controller observes runner state before mirroring. That prevents stale
 local ledger state from pulling a Symphony ticket backward from `In Progress` or
 `Merging` to `Todo`.
 
+The pre-dispatch safety dry-run happens after Objective import/admission and
+before the Linear mirror. If it sees a `Safety Review` action, the controller
+stops before Symphony receives new work.
+
+Apply runs write a final proof packet under:
+
+```text
+.silver/proof_packets/objectives/
+```
+
 Repair defaults to `plan`, not blind code editing. To let the controller execute
 bounded branch repair, opt in:
 
 ```bash
-python scripts/objective_run.py \
+uv run python scripts/objective_run.py \
   --apply \
   --repair-mode apply \
   --push-repairs \

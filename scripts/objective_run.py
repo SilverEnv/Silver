@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
+import shutil
 import shlex
 import sqlite3
 import subprocess
@@ -39,8 +41,18 @@ ACTOR = "objective_run_controller"
 
 RepairMode = Literal["off", "plan", "apply"]
 OutputFormat = Literal["text", "json"]
-CommandKind = Literal["import", "admit", "mirror", "vcs", "repair", "merge", "status"]
+CommandKind = Literal[
+    "import",
+    "admit",
+    "safety",
+    "mirror",
+    "vcs",
+    "repair",
+    "merge",
+    "status",
+]
 RunnerActionName = Literal["noop", "transition", "skip"]
+CheckStatus = Literal["ok", "error"]
 
 RUNNER_TO_LEDGER_STATE = {
     "Backlog": "Backlog",
@@ -80,8 +92,15 @@ class ControllerConfig:
     repair_agent_command: str | None
     poll_interval: int
     max_cycles: int
+    watch: bool
     stop_on_safety: bool
     observe_runner: bool
+    quiet: bool
+    preflight_required_env: tuple[str, ...]
+    preflight_required_commands: tuple[str, ...]
+    preflight_required_auth: tuple[str, ...]
+    proof_packet_dir: Path
+    validation_commands: tuple[str, ...]
     output_format: OutputFormat
 
 
@@ -98,6 +117,18 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreflightCheck:
+    status: CheckStatus
+    subject: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreflightResult:
+    checks: tuple[PreflightCheck, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +244,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--watch", action="store_true")
     parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="alias for --watch; intended for the normal unattended apply path",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        default=None,
+        help="print summary events only",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="print full command details for diagnostics",
+    )
+    parser.add_argument(
         "--no-observe-runner",
         action="store_true",
         help="skip runner-state observation; intended only for diagnostics",
@@ -235,12 +282,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         config = controller_config_from_args(args)
+        preflight = run_preflight(config)
         if args.check:
             print(check_configuration(config))
-            return 0
+            print()
+            print(render_preflight_result(preflight, detail=not config.quiet))
+            return 0 if preflight_passed(preflight) else 1
+
+        if not preflight_passed(preflight):
+            print(render_preflight_result(preflight, detail=True), file=sys.stderr)
+            return 1
+        print(render_preflight_result(preflight, detail=not config.quiet))
 
         max_cycles = config.max_cycles
-        if args.watch and max_cycles < 1:
+        if config.watch and max_cycles < 1:
             max_cycles = 1
         runner = SubprocessCommandRunner()
         observer = LinearSymphonyObserver()
@@ -249,15 +304,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         while True:
             result = run_cycle(config, cycle=cycle, runner=runner, observer=observer)
             results.append(result)
-            print(render_results((result,), config.output_format))
+            print(
+                render_results(
+                    (result,),
+                    config.output_format,
+                    detail=not config.quiet,
+                )
+            )
             if result.stopped:
                 break
-            if not args.watch:
+            if not config.watch:
                 break
             if cycle >= max_cycles:
                 break
             cycle += 1
             time.sleep(config.poll_interval)
+        proof_packet = write_final_proof_packet(
+            config=config,
+            preflight=preflight,
+            results=tuple(results),
+        )
+        if proof_packet is not None:
+            print(f"Final objective proof packet: {proof_packet}")
     except ObjectiveRunError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -270,6 +338,9 @@ def controller_config_from_args(args: argparse.Namespace) -> ControllerConfig:
     runner = mapping(raw_config.get("runner"))
     tracker = mapping(raw_config.get("tracker"))
     vcs = mapping(raw_config.get("vcs"))
+    project_adapter = mapping(raw_config.get("project_adapter"))
+    preflight = mapping(project_adapter.get("preflight"))
+    validation = mapping(project_adapter.get("validation"))
 
     root = args.root.resolve()
     ledger = args.ledger or Path(
@@ -289,6 +360,15 @@ def controller_config_from_args(args: argparse.Namespace) -> ControllerConfig:
     repair_mode = first_text(args.repair_mode, controller.get("repair_mode"), "plan")
     if repair_mode not in {"off", "plan", "apply"}:
         raise ObjectiveRunError("repair_mode must be one of: off, plan, apply")
+    configured_quiet = bool(controller.get("quiet", True))
+    quiet = configured_quiet if args.quiet is None else bool(args.quiet)
+    if args.verbose:
+        quiet = False
+    watch = bool(
+        args.watch
+        or args.daemon
+        or (args.apply and controller.get("watch", False) is True)
+    )
 
     return ControllerConfig(
         root=root,
@@ -329,6 +409,7 @@ def controller_config_from_args(args: argparse.Namespace) -> ControllerConfig:
             controller.get("max_cycles"),
             DEFAULT_MAX_CYCLES,
         ),
+        watch=watch,
         stop_on_safety=not bool(
             args.no_stop_on_safety
             or controller.get("stop_on_safety", True) is False
@@ -337,6 +418,20 @@ def controller_config_from_args(args: argparse.Namespace) -> ControllerConfig:
             args.no_observe_runner
             or runner.get("observe_state", True) is False
         ),
+        quiet=quiet,
+        preflight_required_env=tuple_texts(preflight.get("required_env")),
+        preflight_required_commands=tuple_texts(
+            preflight.get("required_commands")
+        ),
+        preflight_required_auth=tuple_texts(preflight.get("required_auth")),
+        proof_packet_dir=(
+            root
+            / first_text(
+                controller.get("proof_packet_dir"),
+                ".silver/proof_packets/objectives",
+            )
+        ),
+        validation_commands=tuple_texts(validation.get("required")),
         output_format=args.format,
     )
 
@@ -391,6 +486,17 @@ def run_cycle(
                 stopped=True,
                 stop_reason=f"{command.kind} command failed",
             )
+        if command.kind == "safety":
+            findings = safety_dry_run_findings(result)
+            if findings:
+                return CycleResult(
+                    cycle=cycle,
+                    command_results=tuple(command_results),
+                    runner_actions=tuple(runner_actions),
+                    blockers=findings,
+                    stopped=True,
+                    stop_reason="safety dry-run found pre-dispatch blocker",
+                )
         if command.kind in {"mirror", "merge"}:
             runner_actions.extend(observer.observe(config))
             blockers = safety_blockers(config.ledger)
@@ -474,6 +580,18 @@ def command_plan(config: ControllerConfig) -> tuple[CommandSpec, ...]:
                 "--ready-buffer",
                 str(config.ready_buffer),
                 *(("--dry-run",) if not config.apply else ()),
+            ),
+        ),
+        CommandSpec(
+            "safety",
+            command_args(
+                "vcs_reconciler.py",
+                "--ledger",
+                str(config.ledger),
+                "--repo",
+                config.repo,
+                "--limit",
+                str(config.limit),
             ),
         ),
         CommandSpec(
@@ -722,6 +840,65 @@ def safety_blockers(ledger: Path) -> tuple[str, ...]:
     return tuple(f"{row['id']} | {row['status']} | {row['title']}" for row in rows)
 
 
+def run_preflight(
+    config: ControllerConfig,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> PreflightResult:
+    environment = os.environ if env is None else env
+    checks: list[PreflightCheck] = []
+    for name in config.preflight_required_env:
+        if environment.get(name):
+            checks.append(PreflightCheck("ok", f"environment {name}", "set"))
+        else:
+            checks.append(
+                PreflightCheck("error", f"environment {name}", "not set")
+            )
+
+    path = environment.get("PATH", "")
+    for command in config.preflight_required_commands:
+        resolved = shutil.which(command, path=path)
+        if resolved is None:
+            checks.append(PreflightCheck("error", f"command {command}", "missing"))
+        else:
+            checks.append(PreflightCheck("ok", f"command {command}", resolved))
+
+    if "github_cli" in config.preflight_required_auth:
+        checks.append(github_cli_auth_check(environment))
+    return PreflightResult(tuple(checks))
+
+
+def github_cli_auth_check(env: Mapping[str, str]) -> PreflightCheck:
+    if shutil.which("gh", path=env.get("PATH", "")) is None:
+        return PreflightCheck("error", "GitHub auth", "gh CLI is missing")
+    result = subprocess.run(
+        ("gh", "auth", "status"),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=dict(env),
+    )
+    if result.returncode == 0:
+        return PreflightCheck("ok", "GitHub auth", "gh auth status passed")
+    detail = result.stderr.strip() or result.stdout.strip() or "not authenticated"
+    return PreflightCheck("error", "GitHub auth", detail.splitlines()[0])
+
+
+def preflight_passed(result: PreflightResult) -> bool:
+    return all(check.status == "ok" for check in result.checks)
+
+
+def safety_dry_run_findings(result: CommandResult) -> tuple[str, ...]:
+    if result.kind != "safety" or result.returncode != 0:
+        return ()
+    lines = tuple(
+        line.strip()
+        for line in result.stdout.splitlines()
+        if "move_safety_review" in line or "-> Safety Review" in line
+    )
+    return lines
+
+
 def check_configuration(config: ControllerConfig) -> str:
     if not config.ledger.exists():
         raise ObjectiveRunError(
@@ -751,7 +928,9 @@ def check_configuration(config: ControllerConfig) -> str:
             f"Runner adapter: Linear/Symphony project {config.project}",
             f"VCS adapter: GitHub repo {config.repo}",
             f"Max active / ready buffer: {config.max_active} / {config.ready_buffer}",
+            f"Watch mode: {'enabled' if config.watch else 'disabled'}",
             f"Repair mode: {config.repair_mode}",
+            f"Quiet output: {'enabled' if config.quiet else 'disabled'}",
             "Result: local objective controller configuration is valid",
         )
     )
@@ -799,9 +978,26 @@ def first_int(*values: object) -> int:
     raise ObjectiveRunError("missing integer default")
 
 
+def tuple_texts(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        text = value.strip()
+        return (text,) if text else ()
+    if not isinstance(value, Sequence):
+        return ()
+    items: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            items.append(item.strip())
+    return tuple(items)
+
+
 def render_results(
     results: Sequence[CycleResult],
     output_format: OutputFormat,
+    *,
+    detail: bool = True,
 ) -> str:
     if output_format == "json":
         return json.dumps(
@@ -809,6 +1005,8 @@ def render_results(
             indent=2,
             sort_keys=True,
         )
+    if not detail:
+        return render_summary_results(results)
     lines: list[str] = []
     for result in results:
         if lines:
@@ -845,6 +1043,50 @@ def render_results(
             lines.append(f"Stopped: {result.stop_reason}")
         else:
             lines.append("Stopped: no")
+    return "\n".join(lines)
+
+
+def render_preflight_result(result: PreflightResult, *, detail: bool) -> str:
+    errors = [check for check in result.checks if check.status == "error"]
+    if not detail:
+        status = "passed" if not errors else f"failed ({len(errors)} error(s))"
+        return f"Preflight: {status}"
+
+    lines = ["Preflight"]
+    for check in result.checks:
+        label = "OK" if check.status == "ok" else "FAIL"
+        lines.append(f"- {label}: {check.subject}: {check.message}")
+    status = "passed" if not errors else "failed"
+    lines.append(f"Result: preflight {status}")
+    return "\n".join(lines)
+
+
+def render_summary_results(results: Sequence[CycleResult]) -> str:
+    lines: list[str] = []
+    for result in results:
+        failed_commands = sum(
+            1 for command in result.command_results if command.returncode != 0
+        )
+        transition_count = sum(
+            1 for action in result.runner_actions if action.action == "transition"
+        )
+        skip_count = sum(
+            1 for action in result.runner_actions if action.action == "skip"
+        )
+        command_summary = ", ".join(
+            f"{command.kind}:{'ok' if command.returncode == 0 else 'failed'}"
+            for command in result.command_results
+        )
+        outcome = "stopped" if result.stopped else "ok"
+        if failed_commands:
+            outcome = "failed"
+        lines.append(f"Objective run cycle {result.cycle}: {outcome}")
+        lines.append(f"- runner: {transition_count} transition(s), {skip_count} skip(s)")
+        lines.append(f"- commands: {command_summary or 'none'}")
+        if result.blockers:
+            lines.append(f"- safety blockers: {len(result.blockers)}")
+        if result.stopped:
+            lines.append(f"- stopped: {result.stop_reason}")
     return "\n".join(lines)
 
 
@@ -885,6 +1127,133 @@ def cycle_payload(result: CycleResult) -> dict[str, object]:
         "stopped": result.stopped,
         "stop_reason": result.stop_reason,
     }
+
+
+def write_final_proof_packet(
+    *,
+    config: ControllerConfig,
+    preflight: PreflightResult,
+    results: Sequence[CycleResult],
+) -> Path | None:
+    if not config.apply:
+        return None
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    config.proof_packet_dir.mkdir(parents=True, exist_ok=True)
+    path = config.proof_packet_dir / f"objective-run-{timestamp}.md"
+    path.write_text(
+        render_final_proof_packet(
+            config=config,
+            preflight=preflight,
+            results=results,
+            generated_at=timestamp,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def render_final_proof_packet(
+    *,
+    config: ControllerConfig,
+    preflight: PreflightResult,
+    results: Sequence[CycleResult],
+    generated_at: str,
+) -> str:
+    lines = [
+        "# Objective Run Proof Packet",
+        "",
+        f"Generated: {generated_at}",
+        f"Project: {config.project}",
+        f"Repo: {config.repo}",
+        f"Ledger: {config.ledger}",
+        f"Mode: {'apply' if config.apply else 'dry-run'}",
+        f"Watch: {'yes' if config.watch else 'no'}",
+        "",
+        "## Preflight",
+        "",
+    ]
+    for check in preflight.checks:
+        status = "OK" if check.status == "ok" else "FAIL"
+        lines.append(f"- {status}: {check.subject}: {check.message}")
+
+    lines.extend(["", "## Controller Cycles", ""])
+    for result in results:
+        outcome = "stopped" if result.stopped else "ok"
+        lines.append(f"- Cycle {result.cycle}: {outcome}")
+        command_summary = ", ".join(
+            f"{command.kind}:{'ok' if command.returncode == 0 else 'failed'}"
+            for command in result.command_results
+        )
+        lines.append(f"  Commands: {command_summary or 'none'}")
+        transitions = sum(
+            1 for action in result.runner_actions if action.action == "transition"
+        )
+        skips = sum(1 for action in result.runner_actions if action.action == "skip")
+        lines.append(f"  Runner observations: {transitions} transition(s), {skips} skip(s)")
+        if result.blockers:
+            lines.append(f"  Safety blockers: {len(result.blockers)}")
+        if result.stop_reason:
+            lines.append(f"  Stop reason: {result.stop_reason}")
+
+    lines.extend(["", "## Final Ledger State", ""])
+    lines.extend(final_ledger_state_lines(config.ledger))
+
+    lines.extend(["", "## Required Validation", ""])
+    if config.validation_commands:
+        lines.extend(f"- `{command}`" for command in config.validation_commands)
+    else:
+        lines.append("- No adapter validation commands configured.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def final_ledger_state_lines(ledger: Path) -> list[str]:
+    with work_ledger.connect_existing(ledger) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+              objectives.id AS objective_id,
+              objectives.title AS title,
+              objectives.status AS objective_status,
+              tickets.status AS ticket_status,
+              COUNT(tickets.id) AS ticket_count
+            FROM objectives
+            LEFT JOIN tickets ON tickets.objective_id = objectives.id
+            GROUP BY objectives.id, tickets.status
+            ORDER BY objectives.id, tickets.status
+            """
+        ).fetchall()
+
+    if not rows:
+        return ["- No objectives are present in the ledger."]
+
+    grouped: dict[str, dict[str, object]] = {}
+    for row in rows:
+        entry = grouped.setdefault(
+            row["objective_id"],
+            {
+                "title": row["title"],
+                "status": row["objective_status"],
+                "tickets": {},
+            },
+        )
+        tickets = entry["tickets"]
+        if isinstance(tickets, dict) and row["ticket_status"] is not None:
+            tickets[row["ticket_status"]] = row["ticket_count"]
+
+    lines: list[str] = []
+    for objective_id, entry in grouped.items():
+        tickets = entry["tickets"]
+        if isinstance(tickets, dict) and tickets:
+            status_counts = ", ".join(
+                f"{status}={count}" for status, count in sorted(tickets.items())
+            )
+        else:
+            status_counts = "no tickets"
+        lines.append(
+            f"- {objective_id}: {entry['status']} | {entry['title']} | {status_counts}"
+        )
+    return lines
 
 
 if __name__ == "__main__":

@@ -265,30 +265,38 @@ the outcome. Linear is not the approval brain in either mode.
 Dry-run one controller cycle:
 
 ```text
-python scripts/objective_run.py
+uv run python scripts/objective_run.py
 ```
 
-Apply one controller cycle:
+Apply the normal bounded watch path:
 
 ```text
 set -a
 source .env
 set +a
-python scripts/objective_run.py --apply
+uv run python scripts/objective_run.py --apply
 ```
 
-Run a bounded autonomous loop:
+`--daemon` is an explicit alias for watch mode:
 
 ```text
-python scripts/objective_run.py --apply --watch --max-cycles 20 --poll-interval 60
+uv run python scripts/objective_run.py --apply --daemon
 ```
+
+Controller apply mode preflights `DATABASE_URL`, `FMP_API_KEY`,
+`LINEAR_API_KEY`, `gh`, and `gh auth status` before dispatch. It then imports
+approved Objective files, admits runnable DAG tickets, runs VCS/safety policy in
+dry-run before the Linear mirror, and only then mirrors runnable tickets for
+Symphony. Quiet summary events are the default; add `--verbose` for full
+subprocess commands. Apply runs write one final objective proof packet under
+`.silver/proof_packets/objectives/`.
 
 Default repair mode is `plan`: the controller records repair packets and shows
 repair-runner plans. It does not silently edit conflicted code. To execute
 bounded repair:
 
 ```text
-python scripts/objective_run.py \
+uv run python scripts/objective_run.py \
   --apply \
   --repair-mode apply \
   --push-repairs \
@@ -298,7 +306,7 @@ python scripts/objective_run.py \
 For content conflicts that need an agent, provide a repair command template:
 
 ```text
-python scripts/objective_run.py \
+uv run python scripts/objective_run.py \
   --apply \
   --repair-mode apply \
   --push-repairs \
