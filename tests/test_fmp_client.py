@@ -71,6 +71,15 @@ def test_historical_prices_builds_stable_request_and_captures_raw_response() -> 
     assert row["params"] == result.request_params
     assert row["body_raw"] == payload
     assert "real-secret" not in row["request_url"]
+    assert row["metadata"] == {
+        "attempt_number": 1,
+        "attempt_outcome": "success",
+        "audit_contract": "fmp-response-audit-v1",
+        "max_attempts": 3,
+        "max_retries": 2,
+        "retryable": False,
+        "terminal": True,
+    }
     assert result.raw_vault_result.request_fingerprint == request_fingerprint(
         {
             "apikey": "another-secret",
@@ -111,12 +120,13 @@ def test_missing_api_key_raises_clear_configuration_error(
         FMPClient(raw_vault=RawVault(FakeConnection()), transport=FakeTransport([]))
 
 
-def test_non_2xx_response_raises_without_raw_vault_write() -> None:
+def test_terminal_non_2xx_response_is_raw_vaulted_before_http_error() -> None:
+    payload = b'{"error":"not found"}'
     transport = FakeTransport(
         [
             FMPTransportResponse(
                 status_code=404,
-                body=b'{"error":"not found"}',
+                body=payload,
                 headers={"Content-Type": "application/json"},
             )
         ]
@@ -137,10 +147,26 @@ def test_non_2xx_response_raises_without_raw_vault_write() -> None:
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.endpoint == "/api/v3/historical-price-full/AAPL"
-    assert connection.rows == []
+    assert exc_info.value.body == payload
+
+    [row] = connection.rows
+    assert row["http_status"] == 404
+    assert row["body_raw"] == payload
+    assert row["content_type"] == "application/json"
+    assert row["params"]["apikey"] == REDACTED_VALUE
+    assert "real-secret" not in row["request_url"]
+    assert row["metadata"] == {
+        "attempt_number": 1,
+        "attempt_outcome": "terminal_failure",
+        "audit_contract": "fmp-response-audit-v1",
+        "max_attempts": 3,
+        "max_retries": 2,
+        "retryable": False,
+        "terminal": True,
+    }
 
 
-def test_transient_status_retries_then_captures_success() -> None:
+def test_transient_failed_attempt_is_raw_vaulted_before_retry_success() -> None:
     transport = FakeTransport(
         [
             FMPTransportResponse(status_code=503, body=b"try later", headers={}),
@@ -149,13 +175,19 @@ def test_transient_status_retries_then_captures_success() -> None:
     )
     connection = FakeConnection()
     sleeps: list[float] = []
+
+    def sleep_after_raw_capture(seconds: float) -> None:
+        assert len(connection.rows) == 1
+        assert connection.rows[0]["http_status"] == 503
+        sleeps.append(seconds)
+
     client = FMPClient(
         api_key="real-secret",
         raw_vault=RawVault(connection),
         transport=transport,
         max_retries=2,
         backoff_seconds=0.25,
-        sleep=sleeps.append,
+        sleep=sleep_after_raw_capture,
     )
 
     result = client.fetch_historical_daily_prices(
@@ -167,14 +199,36 @@ def test_transient_status_retries_then_captures_success() -> None:
     assert result.http_status == 200
     assert len(transport.calls) == 2
     assert sleeps == [0.25]
-    assert connection.rows[0]["metadata"]["attempt"] == 2
+    assert [row["http_status"] for row in connection.rows] == [503, 200]
+    assert [row["body_raw"] for row in connection.rows] == [b"try later", b"{}"]
+    assert connection.rows[0]["metadata"] == {
+        "attempt_number": 1,
+        "attempt_outcome": "retry_scheduled",
+        "audit_contract": "fmp-response-audit-v1",
+        "max_attempts": 3,
+        "max_retries": 2,
+        "retryable": True,
+        "terminal": False,
+    }
+    assert connection.rows[1]["metadata"] == {
+        "attempt_number": 2,
+        "attempt_outcome": "success",
+        "audit_contract": "fmp-response-audit-v1",
+        "max_attempts": 3,
+        "max_retries": 2,
+        "retryable": False,
+        "terminal": True,
+    }
+    assert connection.rows[0]["params"]["apikey"] == REDACTED_VALUE
+    assert "real-secret" not in connection.rows[0]["request_url"]
+    assert result.raw_vault_result.raw_object_id == connection.rows[1]["id"]
 
 
-def test_transient_status_exhaustion_raises_http_error() -> None:
+def test_transient_status_exhaustion_raw_vaults_every_response() -> None:
     transport = FakeTransport(
         [
-            FMPTransportResponse(status_code=503, body=b"try later", headers={}),
-            FMPTransportResponse(status_code=503, body=b"try later", headers={}),
+            FMPTransportResponse(status_code=503, body=b"try later 1", headers={}),
+            FMPTransportResponse(status_code=503, body=b"try later 2", headers={}),
         ]
     )
     connection = FakeConnection()
@@ -196,8 +250,20 @@ def test_transient_status_exhaustion_raises_http_error() -> None:
         )
 
     assert exc_info.value.status_code == 503
+    assert exc_info.value.body == b"try later 2"
     assert sleeps == [0.5]
-    assert connection.rows == []
+    assert [row["http_status"] for row in connection.rows] == [503, 503]
+    assert [row["body_raw"] for row in connection.rows] == [
+        b"try later 1",
+        b"try later 2",
+    ]
+    assert [row["metadata"]["attempt_number"] for row in connection.rows] == [1, 2]
+    assert [row["metadata"]["attempt_outcome"] for row in connection.rows] == [
+        "retry_scheduled",
+        "terminal_failure",
+    ]
+    assert [row["metadata"]["terminal"] for row in connection.rows] == [False, True]
+    assert [row["metadata"]["retryable"] for row in connection.rows] == [True, True]
 
 
 def test_malformed_transport_response_raises_explicit_error() -> None:

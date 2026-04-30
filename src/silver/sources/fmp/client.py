@@ -16,6 +16,7 @@ from silver.ingest.raw_vault import REDACTED_VALUE, RawVaultWriteResult
 
 
 FMP_SOURCE = "fmp"
+FMP_RESPONSE_AUDIT_CONTRACT = "fmp-response-audit-v1"
 DEFAULT_BASE_URL = "https://financialmodelingprep.com"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_RETRIES = 2
@@ -125,11 +126,20 @@ class FMPClient:
     ) -> FMPRawResponse:
         """Fetch FMP historical daily prices and persist the exact response bytes."""
         request = self._historical_daily_price_request(symbol, start_date, end_date)
-        response, attempt = self._get_with_retries(request)
+        return self._get_with_retries(request)
+
+    def _write_raw_response(
+        self,
+        *,
+        request: _FMPRequest,
+        response: FMPTransportResponse,
+        metadata: Mapping[str, Any],
+    ) -> FMPRawResponse:
         fetched_at = self._now()
         if fetched_at.tzinfo is None or fetched_at.utcoffset() is None:
             raise FMPTransportError("now() must return a timezone-aware datetime")
 
+        content_type = _content_type(response.headers)
         vault_result = self._raw_vault.write_response(
             source=FMP_SOURCE,
             endpoint=request.endpoint,
@@ -137,9 +147,9 @@ class FMPClient:
             request_url=request.request_url,
             body=response.body,
             http_status=response.status_code,
-            content_type=_content_type(response.headers),
+            content_type=content_type,
             fetched_at=fetched_at,
-            metadata={"attempt": attempt, "max_retries": self._max_retries},
+            metadata=metadata,
         )
 
         return FMPRawResponse(
@@ -149,7 +159,7 @@ class FMPClient:
             request_params=dict(request.safe_vault_params),
             body=response.body,
             http_status=response.status_code,
-            content_type=_content_type(response.headers),
+            content_type=content_type,
             fetched_at=fetched_at,
             raw_vault_result=vault_result,
         )
@@ -193,15 +203,39 @@ class FMPClient:
     def _get_with_retries(
         self,
         request: _FMPRequest,
-    ) -> tuple[FMPTransportResponse, int]:
-        for attempt in range(1, self._max_retries + 2):
+    ) -> FMPRawResponse:
+        max_attempts = self._max_retries + 1
+        for attempt in range(1, max_attempts + 1):
             response = self._get_once(request)
-            if 200 <= response.status_code <= 299:
-                return response, attempt
-            if (
-                response.status_code in TRANSIENT_HTTP_STATUSES
-                and attempt <= self._max_retries
-            ):
+
+            success = _success_status(response.status_code)
+            retryable = response.status_code in TRANSIENT_HTTP_STATUSES
+            retry_scheduled = retryable and not success and attempt <= self._max_retries
+            terminal = success or not retry_scheduled
+            if success:
+                attempt_outcome = "success"
+            elif retry_scheduled:
+                attempt_outcome = "retry_scheduled"
+            else:
+                attempt_outcome = "terminal_failure"
+
+            raw_response = self._write_raw_response(
+                request=request,
+                response=response,
+                metadata={
+                    "audit_contract": FMP_RESPONSE_AUDIT_CONTRACT,
+                    "attempt_number": attempt,
+                    "max_retries": self._max_retries,
+                    "max_attempts": max_attempts,
+                    "retryable": retryable,
+                    "terminal": terminal,
+                    "attempt_outcome": attempt_outcome,
+                },
+            )
+
+            if success:
+                return raw_response
+            if retry_scheduled:
                 self._sleep(self._retry_delay(attempt))
                 continue
             raise FMPHTTPError(
@@ -324,6 +358,10 @@ def _request_date(value: date | str, name: str) -> date:
 def _url(base_url: str, endpoint: str, query_params: Mapping[str, str]) -> str:
     query = urllib.parse.urlencode(sorted(query_params.items()))
     return f"{base_url}{endpoint}?{query}"
+
+
+def _success_status(status_code: int) -> bool:
+    return 200 <= status_code <= 299
 
 
 def _redacted_params(params: Mapping[str, str]) -> dict[str, str]:
