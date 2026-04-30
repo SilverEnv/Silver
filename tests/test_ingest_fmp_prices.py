@@ -10,7 +10,7 @@ import pytest
 
 from silver.ingest import FmpPriceIngestError, RawVault, ingest_fmp_prices
 from silver.ingest.raw_vault import REDACTED_VALUE
-from silver.sources.fmp import FMPClient, FMPTransportResponse
+from silver.sources.fmp import FMPClient, FMPHTTPError, FMPTransportResponse
 
 
 CLI_PATH = Path(__file__).resolve().parents[1] / "scripts" / "ingest_fmp_prices.py"
@@ -129,6 +129,52 @@ def test_parse_failure_keeps_raw_capture_and_marks_run_failed() -> None:
     assert "commit" in connection.events[
         connection.events.index("raw:AAPL") : connection.events.index("run:failed")
     ]
+
+
+def test_http_failure_keeps_raw_capture_and_marks_run_failed() -> None:
+    connection = FakeConnection(tickers=("AAPL",))
+    client = _client(
+        connection,
+        [
+            FMPTransportResponse(
+                status_code=404,
+                body=b'{"error":"missing"}',
+                headers={"Content-Type": "application/json"},
+            )
+        ],
+    )
+
+    with pytest.raises(FMPHTTPError, match="HTTP 404"):
+        ingest_fmp_prices(
+            connection=connection,
+            client=client,
+            universe="falsifier_seed",
+            start_date=date(2024, 1, 2),
+            end_date=date(2024, 1, 2),
+            code_git_sha="abc1234",
+        )
+
+    assert len(connection.raw_objects) == 1
+    [row] = connection.raw_objects
+    assert row["http_status"] == 404
+    assert row["body_raw"] == b'{"error":"missing"}'
+    assert row["content_type"] == "application/json"
+    assert row["params"]["apikey"] == REDACTED_VALUE
+    assert "real-secret" not in row["request_url"]
+    assert row["metadata"] == {
+        "attempt_number": 1,
+        "attempt_outcome": "terminal_failure",
+        "audit_contract": "fmp-response-audit-v1",
+        "max_attempts": 3,
+        "max_retries": 2,
+        "retryable": False,
+        "terminal": True,
+    }
+    assert connection.prices_daily == {}
+    assert connection.analytics_runs[0]["status"] == "failed"
+    raw_index = connection.events.index("raw:AAPL")
+    failed_index = connection.events.index("run:failed")
+    assert "commit" in connection.events[raw_index:failed_index]
 
 
 def test_check_config_uses_seed_reference_data() -> None:
