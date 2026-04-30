@@ -604,10 +604,28 @@ def normalize_linear_description(description: str) -> str:
             continue
         line = line.replace(r"\`", "`")
         line = re.sub(r"`{3,}", "``", line)
+        line = normalize_linear_autolinks(line)
         if stripped.startswith("* "):
             line = line.replace("* ", "- ", 1)
         normalized_lines.append(line)
     return "\n".join(normalized_lines).strip()
+
+
+def normalize_linear_autolinks(line: str) -> str:
+    """Collapse Linear's readback of bare URLs as Markdown links."""
+
+    def replace(match: re.Match[str]) -> str:
+        label = match.group("label")
+        target = match.group("target")
+        if label == target:
+            return label
+        return match.group(0)
+
+    return re.sub(
+        r"\[(?P<label>https?://[^\]]+)\]\(<(?P<target>https?://[^>]+)>\)",
+        replace,
+        line,
+    )
 
 
 def matching_issue(
