@@ -547,12 +547,44 @@ def test_report_traceability_validation_rejects_backtest_joined_to_wrong_model_r
 @pytest.mark.parametrize(
     ("traceability_overrides", "expected_field"),
     (
+        (
+            {"model_available_at_policy_versions": {"daily_price": 2}},
+            "model_runs.available_at_policy_versions",
+        ),
+        (
+            {
+                "model_input_fingerprints": {
+                    "joined_feature_label_rows_sha256": "e" * 64,
+                },
+            },
+            "model_runs.input_fingerprints.joined_feature_label_rows_sha256",
+        ),
+        (
+            {"model_cost_assumptions": {"round_trip_cost_bps": 99.0}},
+            "model_runs.cost_assumptions",
+        ),
+        (
+            {"model_parameters": {"window_source": "manual_override"}},
+            "model_runs.parameters.window_source",
+        ),
+        (
+            {"backtest_universe_name": "expanded_seed"},
+            "backtest_runs.universe_name",
+        ),
+        (
+            {"backtest_cost_assumptions": {"round_trip_cost_bps": 99.0}},
+            "backtest_runs.cost_assumptions",
+        ),
         ({"backtest_metrics_by_regime": {}}, "backtest_runs.metrics_by_regime"),
         (
             {"backtest_label_scramble_metrics": {"status": "not_run"}},
             "backtest_runs.label_scramble_metrics",
         ),
         ({"backtest_label_scramble_pass": False}, "backtest_runs.label_scramble_pass"),
+        (
+            {"backtest_multiple_comparisons_correction": "bh"},
+            "backtest_runs.multiple_comparisons_correction",
+        ),
     ),
 )
 def test_report_traceability_validation_checks_complete_backtest_claim_metadata(

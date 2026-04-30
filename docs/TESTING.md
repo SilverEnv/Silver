@@ -137,3 +137,21 @@ cost assumptions, universe, horizon, target kind, baseline metrics, headline
 metrics, regime metrics, label-scramble result, and available-at policy
 versions. `insufficient_data` rows may be validated for deterministic handling,
 but they are no-claim evidence and do not satisfy accepted-backtest proof.
+
+Replay-from-run-id contract tests must cover the read side of that proof:
+
+- resolving `backtest_run_id` or `backtest_run_key` to exactly one
+  `backtest_runs` row and its joined `model_runs` metadata
+- proving the traceability snapshot carries every replay input needed for a
+  rerun: code SHA, feature-set hash, feature snapshot or input fingerprints,
+  windows, horizon, target kind, random seed, cost assumptions, parameters,
+  available-at policy versions, universe, metrics, baselines, regimes,
+  label-scramble evidence, and multiple-comparisons setting
+- proving deterministic model/backtest identity changes when stable replay
+  inputs change and stays unchanged when only invocation metadata changes
+- rejecting missing rows, broken joins, empty replay inputs, non-terminal
+  accepted-claim rows, non-`succeeded` accepted-claim rows, and mismatches in
+  any replay identity or report-critical metric field
+- proving replay paths do not call live ingest or vendor clients and do not
+  derive deterministic identity from UUIDs, timestamps, process ids, host/user
+  names, output paths, report paths, or database surrogate ids

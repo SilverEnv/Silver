@@ -88,6 +88,21 @@ Runtime writers must treat migrations `004_backtest_metadata.sql` and
   model-run metadata. Reports, markdown files, and CLI arguments can display
   metadata, but they are not the authoritative registry when durable rows are
   available.
+- Backtest replay from run identity is a read of that same registry boundary.
+  A complete accepted-claim replay starts from `backtest_run_id` or
+  `backtest_run_key`, loads the joined `model_runs` row, and reconstructs the
+  normalized replay inputs from stored metadata only. `model_run_id` by itself
+  is enough to audit model/prediction identity, but not enough to select one
+  complete backtest claim when several backtests share a model run.
+- Replay callers must fail closed on missing rows, broken joins, empty replay
+  inputs, non-terminal accepted-claim rows, non-`succeeded` accepted-claim rows,
+  or mismatches in code SHA, feature-set hash, feature snapshot/input
+  fingerprints, windows, horizon, target kind, random seed, cost assumptions,
+  parameters, policy versions, universe, metrics, baselines, regimes,
+  label-scramble evidence, or multiple-comparisons setting. They must not fill
+  gaps from current CLI defaults, current policy config, live vendor clients,
+  report paths, timestamps, UUIDs, process ids, host/user names, or database
+  surrogate ids.
 
 For a clean local Postgres database, prefer the single bootstrap command:
 

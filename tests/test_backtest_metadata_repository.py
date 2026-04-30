@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -17,6 +17,54 @@ from silver.analytics import (
     ModelRunCreate,
     ModelRunFinish,
 )
+
+REPLAY_SNAPSHOT_FIELDS = {
+    "model_run_id",
+    "model_run_key",
+    "model_status",
+    "model_code_git_sha",
+    "model_feature_set_hash",
+    "model_feature_snapshot_ref",
+    "model_training_start_date",
+    "model_training_end_date",
+    "model_test_start_date",
+    "model_test_end_date",
+    "model_horizon_days",
+    "model_target_kind",
+    "model_random_seed",
+    "model_cost_assumptions",
+    "model_metrics",
+    "model_parameters",
+    "model_available_at_policy_versions",
+    "model_input_fingerprints",
+    "backtest_run_id",
+    "backtest_run_key",
+    "backtest_status",
+    "backtest_model_run_id",
+    "backtest_universe_name",
+    "backtest_horizon_days",
+    "backtest_target_kind",
+    "backtest_cost_assumptions",
+    "backtest_metrics",
+    "backtest_metrics_by_regime",
+    "backtest_baseline_metrics",
+    "backtest_label_scramble_metrics",
+    "backtest_label_scramble_pass",
+    "backtest_parameters",
+    "backtest_multiple_comparisons_correction",
+}
+
+INVOCATION_ONLY_FIELDS = {
+    "invocation_id",
+    "process_id",
+    "host_name",
+    "user_name",
+    "output_path",
+    "report_path",
+    "started_at",
+    "finished_at",
+    "created_at",
+}
 
 
 def test_model_run_lifecycle_supports_terminal_statuses() -> None:
@@ -96,7 +144,9 @@ def test_traceability_snapshot_resolves_backtest_run_to_model_run_metadata() -> 
     repository = BacktestMetadataRepository(connection)
 
     model = repository.create_model_run(_model_run_create())
-    backtest = repository.create_backtest_run(_backtest_run_create(model_run_id=model.id))
+    backtest = repository.create_backtest_run(
+        _backtest_run_create(model_run_id=model.id),
+    )
     repository.finish_model_run(
         model.id,
         ModelRunFinish(status="succeeded", metrics={"split_count": 3}),
@@ -138,6 +188,52 @@ def test_traceability_snapshot_resolves_backtest_run_to_model_run_metadata() -> 
     assert "br.label_scramble_metrics AS backtest_label_scramble_metrics" in sql
     assert "br.label_scramble_pass AS backtest_label_scramble_pass" in sql
     assert params == {"backtest_run_id": backtest.id}
+
+
+def test_traceability_snapshot_is_replay_contract_from_backtest_run_id() -> None:
+    connection = FakeMetadataConnection()
+    repository = BacktestMetadataRepository(connection)
+
+    model = repository.create_model_run(_model_run_create())
+    backtest = repository.create_backtest_run(_backtest_run_create(model_run_id=model.id))
+    repository.finish_model_run(
+        model.id,
+        ModelRunFinish(status="succeeded", metrics={"split_count": 3}),
+    )
+    repository.finish_backtest_run(backtest.id, _backtest_run_finish())
+
+    snapshot = repository.load_backtest_traceability_snapshot(backtest.id)
+    snapshot_fields = {field.name for field in fields(snapshot)}
+
+    assert REPLAY_SNAPSHOT_FIELDS <= snapshot_fields
+    assert INVOCATION_ONLY_FIELDS.isdisjoint(snapshot_fields)
+    assert snapshot.backtest_run_id == backtest.id
+    assert snapshot.backtest_model_run_id == model.id
+    assert snapshot.model_run_id == model.id
+    assert snapshot.model_code_git_sha == "abcdef0"
+    assert snapshot.model_feature_set_hash == "a" * 64
+    assert snapshot.model_feature_snapshot_ref == "feature-snapshot:v1"
+    assert snapshot.model_input_fingerprints == {"universe": "falsifier_seed"}
+    assert snapshot.model_available_at_policy_versions == {"daily_price": 1}
+    assert snapshot.model_random_seed == 7
+    assert snapshot.backtest_universe_name == "falsifier_seed"
+    assert snapshot.backtest_multiple_comparisons_correction == "bh"
+    assert snapshot.backtest_label_scramble_pass is True
+
+
+def test_traceability_snapshot_rejects_missing_backtest_run_id() -> None:
+    connection = FakeMetadataConnection()
+    repository = BacktestMetadataRepository(connection)
+
+    with pytest.raises(
+        BacktestMetadataError,
+        match="traceability metadata was not found",
+    ):
+        repository.load_backtest_traceability_snapshot(999)
+
+    sql, params = connection.executed[-1]
+    assert sql.startswith("SELECT\n    mr.id AS model_run_id")
+    assert params == {"backtest_run_id": 999}
 
 
 def test_analytics_run_lifecycle_stores_invocation_metadata_with_run_keys() -> None:
@@ -199,6 +295,54 @@ def test_create_model_run_rejects_same_key_with_different_metadata() -> None:
 
     with pytest.raises(BacktestMetadataError, match="different metadata"):
         repository.create_model_run(replace(run, random_seed=99))
+
+
+@pytest.mark.parametrize(
+    "override",
+    (
+        pytest.param({"code_git_sha": "badcafe"}, id="code_git_sha"),
+        pytest.param({"feature_set_hash": "b" * 64}, id="feature_set_hash"),
+        pytest.param(
+            {"feature_snapshot_ref": "feature-snapshot:v2"},
+            id="feature_snapshot_ref",
+        ),
+        pytest.param(
+            {"cost_assumptions": {"half_spread_bps": 10}},
+            id="cost_assumptions",
+        ),
+        pytest.param(
+            {"available_at_policy_versions": {"daily_price": 2}},
+            id="available_at_policy_versions",
+        ),
+        pytest.param(
+            {"input_fingerprints": {"universe": "expanded_seed"}},
+            id="input_fingerprints",
+        ),
+    ),
+)
+def test_model_run_replay_identity_rejects_same_key_with_changed_stable_input(
+    override: dict[str, Any],
+) -> None:
+    connection = FakeMetadataConnection()
+    repository = BacktestMetadataRepository(connection)
+    run = _model_run_create()
+    repository.create_model_run(run)
+
+    with pytest.raises(BacktestMetadataError, match="different metadata"):
+        repository.create_model_run(replace(run, **override))
+
+
+def test_backtest_run_replay_identity_rejects_same_key_metadata_drift() -> None:
+    connection = FakeMetadataConnection()
+    repository = BacktestMetadataRepository(connection)
+    model = repository.create_model_run(_model_run_create())
+    run = _backtest_run_create(model_run_id=model.id)
+    repository.create_backtest_run(run)
+
+    with pytest.raises(BacktestMetadataError, match="different metadata"):
+        repository.create_backtest_run(
+            replace(run, universe_name="expanded_seed"),
+        )
 
 
 def test_invalid_inputs_are_rejected_before_sql_execution() -> None:
