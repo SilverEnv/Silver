@@ -1,0 +1,51 @@
+# Portable agentic build-system adapter configuration for Silver.
+#
+# The controller is intentionally thin: it keeps Symphony as the execution
+# engine and only coordinates objective DAG state, runner mirroring, VCS
+# reconciliation, repair routing, and merge stewardship.
+
+project:
+  name: Silver
+  adapter: silver
+
+runner:
+  kind: linear_symphony
+  observe_state: true
+
+tracker:
+  kind: linear
+  project_slug: silver-af92bd962fcf
+
+vcs:
+  kind: github
+  repo: SilverEnv/Silver
+
+controller:
+  max_active: 5
+  ready_buffer: 5
+  limit: 100
+  poll_interval_seconds: 60
+  max_cycles: 1
+  repair_mode: plan
+  push_repairs: false
+  run_repair_validation: false
+  stop_on_safety: true
+
+project_adapter:
+  validation:
+    required:
+      - git diff --check
+      - python -m pytest
+      - ruff check .
+      - python scripts/run_falsifier.py --check
+  safety:
+    stop_classes:
+      - destructive
+      - semantic
+      - security
+      - paid_live
+      - scope_risk
+    silver_rules:
+      - point-in-time available_at changes require Safety Review
+      - data deletion and destructive migrations require Safety Review
+      - new live or paid vendor usage requires Safety Review

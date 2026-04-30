@@ -3,6 +3,9 @@
 Objective:
 One clear user-facing outcome.
 
+Approval Mode:
+chat-approved local run | objective-doc PR | other explicit approval path.
+
 User Value:
 Who benefits and how.
 
@@ -17,6 +20,13 @@ Work that must not be included.
 
 Guardrails:
 Project laws, data safety, permissions, and irreversible actions to avoid.
+
+Project Adapter:
+Repo-specific validation, safety, and domain rules this Objective uses.
+
+Runner Adapter:
+The runner that should execute mirrored runnable tickets. For Silver this is
+Linear/Symphony unless explicitly stated otherwise.
 
 Expected Tickets:
 Tickets are compiled output from this Objective. Each ticket should include the

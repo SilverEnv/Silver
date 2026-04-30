@@ -24,6 +24,11 @@ and humans building Silver.
   ticket ledger CLI for fast orchestration state
 - [`../scripts/linear_mirror.py`](../scripts/linear_mirror.py): mirrors local
   ledger ticket state to Linear for current Symphony visibility
+- [`../scripts/objective_run.py`](../scripts/objective_run.py): portable
+  objective run controller that composes the ledger, Linear/Symphony mirror,
+  VCS reconciler, repair lane, and merge steward
+- [`../config/agentic_build.yaml`](../config/agentic_build.yaml): Silver project
+  adapter config for the portable objective controller
 
 ## Plans
 
