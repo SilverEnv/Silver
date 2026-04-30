@@ -603,6 +603,43 @@ cost/execution assumptions, parameters, available-at policy versions, and final
 model-run status. Reports may echo command-line metadata, but the registry rows
 are the source of truth for reproducing or rejecting a reported backtest.
 
+#### Backtest replay from run identity
+
+Accepted-claim replay starts from a durable backtest identity:
+`backtest_run_id` or `backtest_run_key`. Replay must load the matching
+`backtest_runs` row and the exact joined `model_runs` row before any rerun or
+dry-run comparison. A `model_run_id` alone can reconstruct model and prediction
+identity, but it is not a complete accepted backtest claim because multiple
+backtest rows can legitimately reference the same model run.
+
+The deterministic replay contract is the union of:
+
+- model identity fields: `model_run_key`, `code_git_sha`, `feature_set_hash`,
+  `feature_snapshot_ref` when present, `input_fingerprints`, training/test
+  dates, `horizon_days`, `target_kind`, `random_seed`, `cost_assumptions`,
+  normalized model parameters, available-at policy versions, model metrics, and
+  terminal model status
+- backtest identity and evidence fields: `backtest_run_key`, the durable
+  `model_run_id` join, `universe_name`, `horizon_days`, `target_kind`,
+  `cost_assumptions`, normalized backtest parameters, headline metrics, regime
+  metrics, baseline metrics, label-scramble metrics, `label_scramble_pass`,
+  multiple-comparisons setting, and terminal backtest status
+
+Replay must reject, not patch over, any missing row, broken join, missing
+replay input, non-terminal accepted-claim row, non-`succeeded` accepted-claim
+row, changed deterministic key, changed policy/cost/config/input field, or
+changed report-critical metric. The rejection must name the mismatched field
+well enough for an operator or merge steward to audit it. Replay must never
+silently substitute current CLI defaults, current available-at policies,
+current feature definitions, current vendor data, or fresh invocation metadata
+for the values recorded on the original run.
+
+Non-goals for replay from run identity: no live or paid vendor fetches, no
+rewriting applied migrations, no feature-family expansion, no regeneration from
+newer feature definitions, no portfolio or paper-trading execution, and no use
+of UUIDs, process ids, host/user names, timestamps, output paths, report paths,
+or database surrogate ids as deterministic run identity fields.
+
 #### Falsifier run identity
 
 For `scripts/run_falsifier.py`, `model_run_key` is a deterministic model
@@ -1120,12 +1157,21 @@ that join, or whose report metadata disagrees with the joined registry rows, is
 not reproducible and must not be used as evidence for the thesis.
 
 Replay procedure:
-1. Check out `code_git_sha`
-2. Apply `available_at_policy_versions`
-3. Materialize features from `feature_snapshot_ref` when present, otherwise verify the frozen persisted inputs from `input_fingerprints`
-4. Train with `random_seed` over `training_start_date` through `training_end_date`
-5. Predict over `test_start_date` through `test_end_date`
-6. Verify byte-identical predictions
+1. Resolve `backtest_run_id` or `backtest_run_key` to one `backtest_runs` row.
+2. Resolve `backtest_runs.model_run_id` to one `model_runs` row.
+3. Reject the replay if the row, join, terminal accepted-claim status, or
+   required replay inputs are missing.
+4. Check out `code_git_sha`.
+5. Apply the recorded `available_at_policy_versions`; do not use whatever
+   policy is current at replay time.
+6. Materialize features from `feature_snapshot_ref` when present, otherwise
+   verify the frozen persisted inputs from `input_fingerprints`.
+7. Train with `random_seed` over `training_start_date` through
+   `training_end_date`.
+8. Predict over `test_start_date` through `test_end_date`.
+9. Recompute deterministic model/backtest keys and report-critical metrics.
+10. Reject on any field mismatch; otherwise verify byte-identical predictions
+    and matching accepted-claim evidence.
 
 ---
 
