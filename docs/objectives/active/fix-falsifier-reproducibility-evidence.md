@@ -30,6 +30,33 @@ Done When:
 - Focused tests prove deterministic replay, report evidence, and strategy-path
   label scramble behavior.
 
+ARR-56 Contract:
+- `model_run_key` is a deterministic digest of contract version, code SHA,
+  normalized run config, feature set, joined feature/label input fingerprint,
+  model training/test windows, walk-forward scoring config, random seed,
+  model-run cost/execution assumptions, and available-at policy versions.
+- Fresh invocation metadata, including UUIDs, process ids, wall-clock
+  timestamps, host/user names, output paths, report paths, and database
+  surrogate ids, is not part of `model_run_key` and must not make the
+  `model_runs` or `backtest_runs` create payload differ for the same key.
+- If invocation metadata is retained, it is stored outside deterministic run
+  identity, for example in an append-only `silver.analytics_runs` backtest row
+  whose parameters include the resolved `model_run_key` and `backtest_run_key`.
+- `backtest_run_key` is deterministic from the resolved `model_run_key` plus
+  normalized backtest evidence config, including label-scramble settings,
+  multiple-comparisons setting, cost assumptions, strategy, universe, horizon,
+  and contract version.
+- Falsifier markdown evidence must include durable model/backtest identity,
+  command, git SHA, feature hashes, joined input fingerprint, available-at
+  policy versions, random seed, target kind, execution assumptions, model
+  windows, data coverage, PIT universe membership, gross/net headline metrics,
+  baseline comparison, costs, regime breakdown, label-scramble evidence,
+  multiple-comparisons setting, and traceability validation.
+- No schema change is required for this contract. Existing `model_runs`,
+  `backtest_runs`, and optional append-only `analytics_runs` JSON metadata can
+  represent the identity and evidence contract. A later schema ticket is needed
+  only if downstream work requires queryable per-invocation foreign keys.
+
 Out Of Scope:
 - No new strategy.
 - No new vendor ingestion.

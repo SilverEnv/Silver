@@ -74,6 +74,25 @@ closes are represented with `is_early_close = true` and the UTC
 `session_close` timestamp; intraday microstructure beyond the close timestamp
 is out of scope for Phase 1.
 
+## Falsifier Evidence
+
+Falsifier run identity must include the available-at policy version set used to
+materialize the feature and label inputs. A run with the same code and data but
+a different policy version is a different reproducibility identity because the
+visibility contract changed.
+
+Falsifier evidence may only use feature values visible at each scored
+`asof_date` and labels whose horizon has elapsed by the scored outcome window.
+Regime metrics and label-scramble metrics must be computed from the same scored
+walk-forward test rows used by the reported strategy path. Training-period rows,
+unscored rows, or rows with unavailable labels are not valid evidence for the
+reported falsifier result.
+
+Reports must expose the policy version mapping, joined input fingerprint,
+training/test windows, regime evidence, and label-scramble evidence so a
+reviewer can verify that the artifact did not hide a point-in-time violation
+behind a headline metric.
+
 ## Test Expectations
 
 Add tests that deliberately attempt to use future data and assert rejection.
