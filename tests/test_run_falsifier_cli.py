@@ -157,6 +157,14 @@ def test_report_run_creates_and_finishes_model_and_backtest_success(
     assert '"min_train_sessions":252' in report_text
     assert '"round_trip_cost_bps":20.0' in report_text
     assert "| Report schema version | 3 |" in report_text
+    assert "| covid_shock_recovery_2020_2021 |" in report_text
+    assert "| Scored-row source | reported_scored_walk_forward_test_rows |" in report_text
+    assert "| Selection rule | reported_top_half_selection_mask |" in report_text
+    assert "| P-value | 0.010000 |" in report_text
+    assert "| Pass/fail | pass |" in report_text
+    assert "| Multiple-comparisons correction | none |" in report_text
+    assert "No regime evidence supplied" not in report_text
+    assert "No label-scramble evidence supplied" not in report_text
 
 
 def test_model_run_create_uses_stable_key_for_same_frozen_metadata(
