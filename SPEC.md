@@ -603,6 +603,51 @@ cost/execution assumptions, parameters, available-at policy versions, and final
 model-run status. Reports may echo command-line metadata, but the registry rows
 are the source of truth for reproducing or rejecting a reported backtest.
 
+#### Falsifier run identity
+
+For `scripts/run_falsifier.py`, `model_run_key` is a deterministic model
+identity, not a fresh invocation identity. Re-running the same falsifier at the
+same code and data state must produce the same `model_run_key`.
+
+The `model_run_key` digest input is the canonical JSON form of these stable
+fields, with object keys sorted before hashing:
+
+- contract version for the falsifier identity payload
+- `code_git_sha`
+- normalized run config: `strategy`, `universe_name`, `horizon_days`, and
+  `target_kind`
+- `feature_set_hash` and the feature-definition identity used to derive it
+- joined persisted input fingerprint, specifically
+  `input_fingerprints.joined_feature_label_rows_sha256`
+- model training and test windows, including the window source
+- walk-forward config that changes scored predictions, including minimum train
+  sessions, test sessions, and step sessions
+- random seed
+- model-run cost and execution assumptions recorded in `model_runs`
+- available-at policy version mapping
+
+The digest must not include a UUID, process id, wall-clock start time, duration,
+host/user name, database surrogate id, output path, report path, or CLI spelling
+that does not change the normalized run config. The `model_runs` create payload
+must also stay byte-stable for the same deterministic identity, because the
+repository treats a repeated key with different metadata as a contract
+violation.
+
+Fresh invocation metadata, if retained, is audit metadata outside deterministic
+run identity. It may be stored in an append-only `silver.analytics_runs` row
+with `run_kind = 'backtest'` and the resolved `model_run_key` /
+`backtest_run_key` in `parameters`, or in a later dedicated invocation table.
+It must not be written into the immutable `model_runs` or `backtest_runs`
+create payload for a deterministic key. The existing registry schema is
+sufficient for this contract; a schema change is required only if downstream
+work needs queryable per-invocation foreign keys instead of JSON audit
+metadata.
+
+The `backtest_run_key` is deterministic from the resolved `model_run_key` plus
+the normalized backtest/report config that affects accepted evidence, including
+universe, horizon, strategy, label-scramble settings, multiple-comparisons
+setting, cost assumptions, and contract version.
+
 ### 7.11 Hypotheses
 
 ```sql
@@ -832,6 +877,29 @@ Every backtest run must include:
 4. **Regime breakdown** — metrics across 4 regimes minimum (pre-2019, 2020, 2021-23, 2024+)
 5. **Label-scramble test** — same model on permuted labels must produce Sharpe near zero. If it doesn't, the model or harness is broken.
 6. **Multiple-comparisons correction** — when testing N hypotheses, Benjamini-Hochberg at α=0.05 against the family
+
+Falsifier markdown reports are user-facing evidence artifacts, not just links
+to registry rows. A complete falsifier report must include:
+
+- status and an explicit no-alpha-claim statement for non-accepted evidence
+- normalized run config, report path, and exact command
+- data coverage for joined feature/label rows, distinct tickers, distinct
+  as-of dates, as-of range, and horizon range
+- point-in-time universe membership used by the run
+- `model_run_id`, `model_run_key`, `backtest_run_id`, and `backtest_run_key`
+- git SHA, feature definition hash, feature set hash, joined input fingerprint,
+  available-at policy versions, random seed, target kind, and execution
+  assumptions
+- model training/test windows and their source
+- gross and net headline metrics, baseline comparison, and cost assumptions
+- regime evidence with regime names, date ranges, sample counts, strategy net
+  returns, baseline net returns, and net differences
+- label-scramble evidence with the scored-row source, selection rule, seed,
+  trial count, alpha, observed score, null summary, p-value, and pass/fail
+  result, or a deterministic insufficiency/failure reason
+- multiple-comparisons setting used for the claim family
+- traceability validation result showing the report agrees with the joined
+  `model_runs` and `backtest_runs` metadata before the artifact is written
 
 ### 10.4 Cost model (default)
 

@@ -76,6 +76,16 @@ cost-assumption set, parameters, and available-at policy versions.
 Schema and repository tests must reject rows missing non-empty cost assumptions,
 policy versions, or replay inputs.
 
+Falsifier model-run identity tests must prove that `model_run_key` is
+deterministic for identical code SHA, joined feature/label input fingerprint,
+normalized run config, feature set, training/test window, random seed,
+model-run cost/execution assumptions, and available-at policy versions. The
+same tests must prove the key changes when any one of those stable inputs
+changes, and does not change when only invocation metadata changes. Fresh
+invocation fields such as UUIDs, timestamps, process ids, host/user names,
+output paths, report paths, or database surrogate ids must not be part of the
+`model_runs` or `backtest_runs` create payload for a deterministic key.
+
 Runtime wiring tests for `backtest_runs` must prove each persisted backtest run
 has a stable key, a `model_run_id`, universe, horizon, target kind,
 cost-assumption set, baseline metrics, headline metrics, regime metrics,
@@ -92,6 +102,19 @@ records deterministic insufficiency metadata, and satisfies the shipped
 Backtest reports must include gross and net metrics, baseline comparison,
 regime breakdown, label-scramble result, and the exact model/run metadata used
 to reproduce the output.
+
+Falsifier report tests must assert that the rendered markdown includes the
+required evidence contract from `SPEC.md`: status, no-alpha-claim language,
+run config, data coverage, PIT universe membership, durable model/backtest
+identity, git SHA, feature hashes, joined input fingerprint, available-at
+policy versions, random seed, target kind, execution assumptions, model
+windows, gross/net headline metrics, baseline comparison, costs, regime
+breakdown, label-scramble evidence, multiple-comparisons setting, and the
+traceability validation result. Regime evidence must include the named regime
+date ranges and sample counts. Label-scramble evidence must identify the scored
+row source, selection rule, seed, trial count, alpha, observed score, null
+summary, p-value, and pass/fail result, or a deterministic insufficiency/failure
+reason.
 
 Falsifier report traceability validation must resolve the reported
 `backtest_run_id` through the durable `backtest_runs.model_run_id` join to
