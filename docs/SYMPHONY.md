@@ -46,6 +46,13 @@ not the long-term runtime database for Silver automation. The target source of
 truth is a local Silver work ledger, with Linear kept only as an optional mirror
 or board.
 
+The new objective-aware controller does not replace Symphony. Symphony remains
+the execution engine that watches active mirrored tickets, creates per-ticket
+workspaces, launches Codex agents, tracks active sessions, retries stalled work,
+and returns PRs or proof packets. The controller sits above Symphony and decides
+which Objective DAG tickets become visible to Symphony and how post-PR state
+advances.
+
 | State | Symphony active? | Meaning |
 |---|---:|---|
 | `Backlog` | No | Planned work; do not start. |
@@ -181,6 +188,63 @@ next control-plane layer: stewards should move to reading the ledger first, then
 mirror visible state to Linear only on changes. The mirror maps local `Ready`
 tickets to Linear `Todo`, so Symphony can keep working while the local ledger
 becomes the source of truth.
+
+## Objective Run Controller
+
+The portable controller command is:
+
+```bash
+python scripts/objective_run.py
+```
+
+Default mode is dry-run. It shows the controller cycle without writing:
+
+```text
+observe Linear/Symphony runner state
+import approved Objective files into the ledger
+admit runnable DAG tickets
+mirror runnable tickets to Linear for Symphony
+reconcile GitHub PR state into the ledger
+write repair packets for Rework tickets
+plan bounded repair work
+queue/mark safe Merging PRs through the merge steward
+mirror final ledger state back to Linear
+print ledger status
+```
+
+Apply one cycle after the preview is correct:
+
+```bash
+set -a
+source .env
+set +a
+python scripts/objective_run.py --apply
+```
+
+Keep the controller cycling while Symphony agents and GitHub PRs are moving:
+
+```bash
+python scripts/objective_run.py --apply --watch --max-cycles 20 --poll-interval 60
+```
+
+The controller observes runner state before mirroring. That prevents stale
+local ledger state from pulling a Symphony ticket backward from `In Progress` or
+`Merging` to `Todo`.
+
+Repair defaults to `plan`, not blind code editing. To let the controller execute
+bounded branch repair, opt in:
+
+```bash
+python scripts/objective_run.py \
+  --apply \
+  --repair-mode apply \
+  --push-repairs \
+  --run-repair-validation
+```
+
+Content conflicts that need agentic editing still require an explicit repair
+agent command template. Semantic, destructive, security, paid/live, and
+scope-risk exceptions stop in `Safety Review`.
 
 ## Run
 

@@ -132,6 +132,18 @@ The Silver work ledger is the local source of truth we can poll quickly without
 touching Linear. It is additive to the current bridge: it does not replace
 Symphony dispatch or Linear mirroring yet.
 
+The controller boundary is deliberate:
+
+```text
+Objective Run Controller = objective/DAG coordination and steward loop
+Linear mirror = Symphony-visible dispatch board
+Symphony = agent workspace runner and execution engine
+GitHub = PR and mergeability truth
+```
+
+We are extending Symphony with an objective-aware orchestration layer, not
+replacing Symphony.
+
 Default path:
 
 ```text
@@ -224,6 +236,93 @@ python scripts/integration_repair_runner.py \
 The runner does not rewrite history or force-push. If merge conflicts remain,
 validation fails, PR evidence is missing, or the repair kind is not bounded, the
 ticket stays in `Rework` with a ledger event explaining why.
+
+## Objective Run Controller
+
+`scripts/objective_run.py` is the autonomous controller for the current Silver
+MVP. It composes the existing stewards rather than replacing them:
+
+```text
+work_ledger.py import-objectives
+work_ledger.py admit
+linear_mirror.py
+vcs_reconciler.py
+integration_steward.py
+integration_repair_runner.py
+merge_steward.py
+```
+
+The controller also has the missing runner-observation step: it reads
+Linear/Symphony-visible state back into the ledger before mirroring, so active
+runner tickets are not pulled backward by stale local state.
+
+Objective approval can be audit-first or fast-local. In audit-first mode, an
+Objective doc PR lands before the controller imports tickets. In fast-local
+mode, Michael approves the Objective in chat or local review, the controller
+imports the local Objective into the ledger, and a later evidence/docs PR records
+the outcome. Linear is not the approval brain in either mode.
+
+Dry-run one controller cycle:
+
+```text
+python scripts/objective_run.py
+```
+
+Apply one controller cycle:
+
+```text
+set -a
+source .env
+set +a
+python scripts/objective_run.py --apply
+```
+
+Run a bounded autonomous loop:
+
+```text
+python scripts/objective_run.py --apply --watch --max-cycles 20 --poll-interval 60
+```
+
+Default repair mode is `plan`: the controller records repair packets and shows
+repair-runner plans. It does not silently edit conflicted code. To execute
+bounded repair:
+
+```text
+python scripts/objective_run.py \
+  --apply \
+  --repair-mode apply \
+  --push-repairs \
+  --run-repair-validation
+```
+
+For content conflicts that need an agent, provide a repair command template:
+
+```text
+python scripts/objective_run.py \
+  --apply \
+  --repair-mode apply \
+  --push-repairs \
+  --run-repair-validation \
+  --repair-agent-command 'repair-agent --packet {packet_file} --worktree {worktree}'
+```
+
+Safety behavior:
+
+- `Safety Review` and `Blocked` stop the controller by default.
+- `Done`, `Canceled`, and `Duplicate` in the ledger are authoritative and will
+  not be pulled backward by Linear.
+- Linear `Done` only advances the ledger when the ticket is already in
+  `Merging`; otherwise VCS evidence must close the ticket.
+
+Portable config:
+
+```text
+config/agentic_build.yaml
+```
+
+Silver-specific validation and safety rules live in that project adapter file.
+A new repository should supply its own adapter config while keeping the same
+portable controller contract.
 
 Mirror mapping:
 

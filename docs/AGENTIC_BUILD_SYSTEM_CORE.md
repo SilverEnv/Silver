@@ -69,6 +69,19 @@ The system has three different layers:
 
 Keeping these separate is what makes the architecture portable.
 
+Core operating rule:
+
+```text
+We are extending Symphony with an objective-aware orchestration layer, not
+replacing Symphony.
+```
+
+Symphony remains the runner/execution engine: it watches runnable mirrored
+tickets, creates isolated workspaces, launches Codex agents, manages active
+sessions, handles retry/stall behavior, and returns PRs or proof packets. The
+objective controller sits above that runner and decides what work becomes
+runnable, how PR output is reconciled, and when the Objective DAG can advance.
+
 ## Portable Architecture
 
 ```text
@@ -96,6 +109,29 @@ Integration Steward
 Safety Gate
   stops for destructive, semantic, security, paid/live, or scope-risk cases
 ```
+
+The controller boundary is:
+
+```text
+Objective Run Controller
+  imports/compiles approved Objectives
+  admits runnable DAG tickets
+  mirrors runnable tickets to the runner adapter
+  observes runner state back into the ledger
+  reconciles VCS state
+  invokes repair, merge, and safety policy
+  repeats until the Objective is complete or blocked
+
+Symphony Runner Adapter
+  consumes mirrored runnable tickets
+  starts Codex workspaces
+  runs agents
+  produces PRs and proof packets
+```
+
+The first implementation keeps Linear/Symphony as the runner adapter. Another
+repository may keep the same adapter, or supply a different runner adapter,
+without changing Objective, ledger, VCS, or safety concepts.
 
 ## Core And Adapters
 
@@ -139,6 +175,18 @@ adapter. Silver becomes one customer.
 ## Objective Model
 
 An Objective is the human-approved unit of direction.
+
+Approval does not have to mean "merge an Objective PR before work starts." The
+portable core supports two operating modes:
+
+| Mode | Flow | Use when |
+|---|---|---|
+| Fast-local | Michael approves in chat or local review, the controller writes/imports the Objective into the ledger, and the final evidence is committed later. | The repo owner wants the system to start work immediately. |
+| Audit-first | Objective document PR lands first, then the controller imports the approved Objective from `docs/objectives/active/`. | The team wants repo-history approval before execution. |
+
+Silver currently uses Objective files as the auditable representation, but the
+architecture does not require Linear or a PR to be the approval brain. The
+ledger remains the runtime source of truth after approval.
 
 Required fields:
 
@@ -598,6 +646,43 @@ Done when:
 - Silver-specific words are absent from core code paths except in the Silver
   adapter.
 
+### Stage 10: Autonomous Objective Run Controller
+
+Outcome:
+
+The manual loop of import, admit, mirror, observe, reconcile, repair, merge,
+and mirror again becomes one bounded controller command.
+
+Deliverables:
+
+- Portable controller command that shells out to existing stewards instead of
+  reimplementing them.
+- Runner observation adapter that reads Linear/Symphony-visible state back into
+  the ledger before mirroring, preventing stale local state from pulling active
+  runner tickets backward.
+- Dry-run mode that shows every controller command and runner-state decision.
+- Live mode that applies low-risk state transitions and merge queue actions.
+- Watch mode that repeats the cycle while Symphony agents and GitHub PRs move.
+- Project adapter config that keeps Silver validation and safety rules outside
+  the portable controller logic.
+
+Done when:
+
+- Michael can approve an Objective, start the controller, and watch the DAG
+  advance without manual ticket traffic control.
+- The controller stops on `Safety Review` or `Blocked` tickets by default.
+- Linear remains a Symphony dispatch mirror, not the source of truth.
+- Symphony remains the execution engine.
+
+Current Silver MVP:
+
+- `scripts/objective_run.py` coordinates the existing ledger, Linear mirror,
+  VCS reconciler, integration steward, repair runner, and merge steward.
+- `config/agentic_build.yaml` is the Silver project adapter config.
+- The repair runner is still bounded. It can prepare branches and optionally
+  run an explicit repair-agent command, but it does not silently resolve
+  semantic or safety exceptions.
+
 ## Initial Silver Implementation Slice
 
 The first practical slice should be small:
@@ -623,6 +708,8 @@ Current Silver MVP paths:
 | VCS PR reconciliation and routing | `scripts/vcs_reconciler.py` |
 | Integration repair packets | `scripts/integration_steward.py` |
 | Bounded integration repair runner | `scripts/integration_repair_runner.py` |
+| Objective run controller | `scripts/objective_run.py` |
+| Silver project adapter config | `config/agentic_build.yaml` |
 | Objective template | `docs/objectives/TEMPLATE.md` |
 | Silver operation policy | `docs/Symphony-Operation.md` |
 | Focused tests | `tests/test_planning_steward.py`, `tests/test_work_ledger.py`, `tests/test_linear_mirror.py`, `tests/test_vcs_reconciler.py`, `tests/test_integration_steward.py`, `tests/test_integration_repair_runner.py` |

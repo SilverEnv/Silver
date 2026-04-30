@@ -63,11 +63,14 @@ No description provided.
 1. Work only inside this repository copy.
 2. Start by reading `AGENTS.md`, then the smallest relevant docs.
 3. Treat `SPEC.md` as the product contract.
-4. Keep one persistent `## Codex Workpad` Linear comment current when Linear
+4. Treat the Linear issue as a scoped ticket compiled from a larger Objective
+   graph when Objective metadata is present. Symphony is executing the ticket;
+   it is not choosing product direction.
+5. Keep one persistent `## Codex Workpad` Linear comment current when Linear
    tooling is available.
-5. Never commit `.env` or secrets.
-6. Prefer narrow, reversible implementation with concrete validation evidence.
-7. Final message must include completed actions, validation, and blockers only.
+6. Never commit `.env` or secrets.
+7. Prefer narrow, reversible implementation with concrete validation evidence.
+8. Final message must include completed actions, validation, and blockers only.
 
 ## Status Routing
 
