@@ -425,6 +425,75 @@ def test_planned_external_source_new_live_call_still_requires_review() -> None:
     assert "paid/live external call" in decision.reason
 
 
+def test_missing_credentials_validation_note_does_not_trigger_secret_review() -> None:
+    issue = _issue("ARR-64")
+    pr = _pr(
+        81,
+        title="ARR-64 Validate FMP raw-vault audit trail",
+        body=(
+            "Skipped live FMP ingest apply mode because it requires real "
+            "DATABASE_URL/FMP_API_KEY credentials.\n\n"
+            "No credential was supplied."
+        ),
+        changed_files=_changed_files("docs/objectives/active/example.md"),
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "queue"
+    assert "green" in decision.reason
+
+
+def test_planned_validation_ingest_update_queues() -> None:
+    issue = _issue(
+        "ARR-64",
+        description=(
+            "Ticket Role: validation\n"
+            "Contracts Touched: fmp-response-audit, raw-vault-ingest\n\n"
+            "Owns:\n"
+            "- `docs/objectives/active/raw-vault-failed-fmp-responses.md`\n"
+            "- `tests/test_ingest_fmp_prices.py`\n"
+        ),
+    )
+    pr = _pr(
+        81,
+        title="ARR-64 Validate FMP raw-vault audit trail",
+        body=(
+            "No live FMP calls were made. Skipped apply mode because "
+            "DATABASE_URL/FMP_API_KEY credentials are not set."
+        ),
+        changed_files=_changed_files(
+            "docs/objectives/active/raw-vault-failed-fmp-responses.md",
+            "src/silver/ingest/fmp_prices.py",
+            "tests/test_ingest_fmp_prices.py",
+        ),
+        diff=(
+            "diff --git a/src/silver/ingest/fmp_prices.py b/src/silver/ingest/fmp_prices.py\n"
+            "+++ b/src/silver/ingest/fmp_prices.py\n"
+            "+            except FMPHTTPError:\n"
+            "+                _commit(connection)\n"
+            "+                raise\n"
+            "diff --git a/docs/objectives/active/raw-vault-failed-fmp-responses.md b/docs/objectives/active/raw-vault-failed-fmp-responses.md\n"
+            "+++ b/docs/objectives/active/raw-vault-failed-fmp-responses.md\n"
+            "+This was not a live FMP call and no credential was supplied.\n"
+        ),
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "queue"
+    assert "planned external source implementation" in decision.reason
+    assert "green" in decision.reason
+
+
 def test_contract_pit_doc_deletion_still_requires_safety_review() -> None:
     issue = _issue(
         "ARR-56",

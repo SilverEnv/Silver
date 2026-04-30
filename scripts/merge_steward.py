@@ -1013,7 +1013,8 @@ def planned_external_source_safety_allowance(
     pr: PullRequest,
     safety_trigger: str,
 ) -> str | None:
-    if issue_ticket_role(issue.description) not in {"implementation", "integration"}:
+    ticket_role = issue_ticket_role(issue.description)
+    if ticket_role not in {"implementation", "integration", "validation"}:
         return None
     if not safety_trigger.startswith("paid/live external call change:"):
         return None
@@ -1032,7 +1033,16 @@ def planned_external_source_safety_allowance(
         return None
 
     owns = issue_section_paths(issue.description, "Owns")
-    if not owns or not all(_path_is_covered(path, owns) for path in paths):
+    contracts = issue_contracts_touched(issue.description)
+    if not owns or not all(
+        planned_external_path_is_allowed(
+            path,
+            owns=owns,
+            ticket_role=ticket_role,
+            contracts=contracts,
+        )
+        for path in paths
+    ):
         return None
 
     do_not_touch = issue_section_paths(issue.description, "Do Not Touch")
@@ -1047,6 +1057,22 @@ def planned_external_source_safety_allowance(
     return (
         "planned external source implementation in ticket-owned paths "
         f"(original trigger: {safety_trigger})"
+    )
+
+
+def planned_external_path_is_allowed(
+    path: str,
+    *,
+    owns: Sequence[str],
+    ticket_role: str,
+    contracts: Sequence[str],
+) -> bool:
+    if _path_is_covered(path, owns):
+        return True
+    return (
+        ticket_role == "validation"
+        and path.startswith("src/silver/ingest/")
+        and any("ingest" in contract for contract in contracts)
     )
 
 
@@ -1114,6 +1140,20 @@ def issue_risk_class(description: str) -> str:
     if match is None:
         return ""
     return match.group("risk").strip().lower().replace(" ", "-")
+
+
+def issue_contracts_touched(description: str) -> tuple[str, ...]:
+    match = re.search(
+        r"(?im)^Contracts Touched:\s*(?P<contracts>.+?)\s*$",
+        description,
+    )
+    if match is None:
+        return ()
+    return tuple(
+        item.strip().lower()
+        for item in match.group("contracts").split(",")
+        if item.strip() and item.strip().lower() != "none"
+    )
 
 
 def issue_section_paths(description: str, heading: str) -> tuple[str, ...]:
@@ -1203,14 +1243,16 @@ def external_call_expansion_signal(diff: str) -> bool:
     added_text = _added_diff_text(diff)
     if not added_text:
         return False
-    return _matches_any(
-        added_text,
-        (
-            r"\b(urllib\.request\.urlopen|requests\.|httpx\.|aiohttp\.)",
-            r"https?://",
-            r"\bfinancialmodelingprep\.com\b",
-            r"\b(paid|billing|live)\b.{0,40}\b(call|request|service|api)\b",
-        ),
+    patterns = (
+        r"\b(urllib\.request\.urlopen|requests\.|httpx\.|aiohttp\.)",
+        r"https?://",
+        r"\bfinancialmodelingprep\.com\b",
+        r"\b(paid|billing|live)\b.{0,40}\b(call|request|service|api)\b",
+    )
+    return any(
+        _matches_any(line, patterns)
+        for line in added_text.splitlines()
+        if not no_live_call_statement(line)
     )
 
 
@@ -1406,6 +1448,12 @@ def _metadata_says_secret_handling_changed(text: str) -> bool:
                 r"\b(secret|credential|api[_ -]?key|token)\b",
                 r"\b(secret|credential|api[_ -]?key|token)\b.{0,50}"
                 r"\b(no|not|none|absent)\b",
+                r"\b(skip|skipped|blocked)\b.{0,80}"
+                r"\b(database_url|linear_api_key|fmp_api_key|credential)\b",
+                r"\b(database_url|linear_api_key|fmp_api_key|credential)\b.{0,80}"
+                r"\b(not set|not configured|not supplied|missing|absent)\b",
+                r"\brequires real\b.{0,80}"
+                r"\b(database_url|linear_api_key|fmp_api_key|credentials?)\b",
             ),
         ):
             continue
