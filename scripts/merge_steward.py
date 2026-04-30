@@ -909,6 +909,13 @@ def planned_objective_safety_allowance(
     )
     if security_allowance is not None:
         return security_allowance
+    external_source_allowance = planned_external_source_safety_allowance(
+        issue,
+        pr,
+        safety_trigger,
+    )
+    if external_source_allowance is not None:
+        return external_source_allowance
     return planned_semantic_safety_allowance(issue, pr, safety_trigger)
 
 
@@ -997,6 +1004,48 @@ def planned_contract_security_hardening_allowance(
 
     return (
         "planned contract docs-only security hardening in ticket-owned paths "
+        f"(original trigger: {safety_trigger})"
+    )
+
+
+def planned_external_source_safety_allowance(
+    issue: LinearIssue,
+    pr: PullRequest,
+    safety_trigger: str,
+) -> str | None:
+    if issue_ticket_role(issue.description) not in {"implementation", "integration"}:
+        return None
+    if not safety_trigger.startswith("paid/live external call change:"):
+        return None
+    if "PR metadata" in safety_trigger:
+        return None
+
+    changed_files = tuple(pr.changed_files)
+    if not changed_files:
+        return None
+    paths = tuple(
+        normalized
+        for changed_file in changed_files
+        if (normalized := _normalize_path(changed_file.path))
+    )
+    if not paths or not any(_is_external_call_path(path) for path in paths):
+        return None
+
+    owns = issue_section_paths(issue.description, "Owns")
+    if not owns or not all(_path_is_covered(path, owns) for path in paths):
+        return None
+
+    do_not_touch = issue_section_paths(issue.description, "Do Not Touch")
+    if any(_path_is_covered(path, do_not_touch) for path in paths):
+        return None
+
+    if external_call_expansion_signal(pr.diff or ""):
+        return None
+    if not no_live_call_statement("\n".join((pr.title, pr.head_ref_name, pr.body))):
+        return None
+
+    return (
+        "planned external source implementation in ticket-owned paths "
         f"(original trigger: {safety_trigger})"
     )
 
@@ -1148,6 +1197,33 @@ def secret_relaxation_signal(diff: str) -> bool:
         ):
             return True
     return False
+
+
+def external_call_expansion_signal(diff: str) -> bool:
+    added_text = _added_diff_text(diff)
+    if not added_text:
+        return False
+    return _matches_any(
+        added_text,
+        (
+            r"\b(urllib\.request\.urlopen|requests\.|httpx\.|aiohttp\.)",
+            r"https?://",
+            r"\bfinancialmodelingprep\.com\b",
+            r"\b(paid|billing|live)\b.{0,40}\b(call|request|service|api)\b",
+        ),
+    )
+
+
+def no_live_call_statement(text: str) -> bool:
+    return _matches_any(
+        text,
+        (
+            r"\b(no|not|without)\b.{0,40}\blive\b.{0,40}\b(call|calls|request|requests)\b",
+            r"\blive\b.{0,40}\b(call|calls|request|requests)\b.{0,40}"
+            r"\b(no|not|none|absent|mocked)\b",
+            r"\bmocked\b.{0,40}\b(transport|response|responses|request|requests)\b",
+        ),
+    )
 
 
 def _line_mentions_secret(line: str) -> bool:

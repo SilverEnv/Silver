@@ -353,6 +353,78 @@ def test_planned_contract_security_doc_relaxation_still_requires_review() -> Non
     assert "secret handling" in decision.reason
 
 
+def test_planned_owned_external_source_implementation_queues() -> None:
+    issue = _issue(
+        "ARR-63",
+        description=(
+            "Ticket Role: implementation\n\n"
+            "Owns:\n"
+            "- `src/silver/sources/fmp/client.py`\n"
+            "- `tests/test_fmp_client.py`\n\n"
+            "Do Not Touch:\n"
+            "- `.env`\n"
+        ),
+    )
+    pr = _pr(
+        79,
+        title="ARR-63 Persist failed FMP HTTP attempts",
+        body="No live FMP calls were made; tests use mocked transport responses.",
+        changed_files=_changed_files(
+            "src/silver/sources/fmp/client.py",
+            "tests/test_fmp_client.py",
+        ),
+        diff=(
+            "diff --git a/src/silver/sources/fmp/client.py b/src/silver/sources/fmp/client.py\n"
+            "+++ b/src/silver/sources/fmp/client.py\n"
+            "+raw_response = self._write_raw_response(response=response)\n"
+            "diff --git a/tests/test_fmp_client.py b/tests/test_fmp_client.py\n"
+            "+++ b/tests/test_fmp_client.py\n"
+            "+assert connection.rows[0][\"http_status\"] == 503\n"
+        ),
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "queue"
+    assert "planned external source implementation" in decision.reason
+    assert "green" in decision.reason
+
+
+def test_planned_external_source_new_live_call_still_requires_review() -> None:
+    issue = _issue(
+        "ARR-63",
+        description=(
+            "Ticket Role: implementation\n\n"
+            "Owns:\n"
+            "- `src/silver/sources/fmp/client.py`\n"
+        ),
+    )
+    pr = _pr(
+        79,
+        title="ARR-63 Persist failed FMP HTTP attempts",
+        body="No live FMP calls were made; tests use mocked transport responses.",
+        changed_files=_changed_files("src/silver/sources/fmp/client.py"),
+        diff=(
+            "diff --git a/src/silver/sources/fmp/client.py b/src/silver/sources/fmp/client.py\n"
+            "+++ b/src/silver/sources/fmp/client.py\n"
+            '+requests.get("https://financialmodelingprep.com/api/v3/quote/AAPL")\n'
+        ),
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "move_safety_review"
+    assert "paid/live external call" in decision.reason
+
+
 def test_contract_pit_doc_deletion_still_requires_safety_review() -> None:
     issue = _issue(
         "ARR-56",
