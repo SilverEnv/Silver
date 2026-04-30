@@ -273,6 +273,9 @@ or automation-permission exceptions to `Safety Review` with a blocker comment.
 The Objective-aware VCS reconciler may allow a narrower case before Linear is
 updated: additive docs-only PIT clarifications made by a `contract` ticket
 inside its declared `Owns` paths.
+It also treats approved semantic implementation changes inside declared
+ownership as normal merge candidates, so conflicts become `Rework` instead of
+unnecessary Safety Review stops.
 
 Validate local wiring without network writes:
 

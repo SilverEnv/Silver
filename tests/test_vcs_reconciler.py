@@ -279,6 +279,84 @@ def test_pit_doc_change_with_deletions_still_requires_safety_review(
     assert ticket.status == "Safety Review"
 
 
+def test_rework_ticket_waits_for_repair_before_reclassification(
+    tmp_path: Path,
+) -> None:
+    connection = _ledger_connection(tmp_path)
+    _insert_ticket(
+        connection,
+        ticket_id="portable-orchestration-core-001",
+        status="Rework",
+        linear_identifier="ARR-55",
+        ticket_role="implementation",
+        risk_class="semantic",
+        owns=("scripts/run_falsifier.py",),
+    )
+
+    actions = vcs_reconciler.reconcile_prs(
+        connection,
+        (
+            _pr(
+                61,
+                title="ARR-55 Await repair",
+                changed_files=_changed_files("scripts/run_falsifier.py"),
+                diff="+metrics[\"sharpe\"] = gross_return.mean()\n",
+            ),
+        ),
+        required_checks=("Python 3.10 checks",),
+        apply=True,
+    )
+
+    ticket = work_ledger.select_ticket(connection, "portable-orchestration-core-001")
+
+    assert [action.action for action in actions] == ["wait"]
+    assert actions[0].reason == "ticket is already in Rework"
+    assert ticket.status == "Rework"
+
+
+def test_planned_semantic_owned_dirty_pr_moves_to_rework(
+    tmp_path: Path,
+) -> None:
+    connection = _ledger_connection(tmp_path)
+    _insert_ticket(
+        connection,
+        ticket_id="portable-orchestration-core-001",
+        status="Merging",
+        linear_identifier="ARR-55",
+        ticket_role="implementation",
+        risk_class="semantic",
+        owns=("scripts/run_falsifier.py", "tests/test_run_falsifier_cli.py"),
+    )
+
+    actions = vcs_reconciler.reconcile_prs(
+        connection,
+        (
+            _pr(
+                61,
+                title="ARR-55 Stabilize run identity",
+                merge_state_status="DIRTY",
+                changed_files=_changed_files(
+                    "scripts/run_falsifier.py",
+                    "tests/test_run_falsifier_cli.py",
+                ),
+                diff=(
+                    "+model_run_key = stable_digest(identity_payload)\n"
+                    "+metrics[\"model_run_key\"] = model_run_key\n"
+                ),
+            ),
+        ),
+        required_checks=("Python 3.10 checks",),
+        apply=True,
+    )
+
+    ticket = work_ledger.select_ticket(connection, "portable-orchestration-core-001")
+
+    assert [action.action for action in actions] == ["move_rework"]
+    assert "planned semantic change in ticket-owned paths" in actions[0].reason
+    assert "merge conflicts" in actions[0].reason
+    assert ticket.status == "Rework"
+
+
 def test_linear_identifier_matching_ignores_body_mentions_and_prefixes(
     tmp_path: Path,
 ) -> None:
@@ -329,6 +407,7 @@ def _insert_ticket(
     status: str = "In Progress",
     linear_identifier: str | None = None,
     ticket_role: str = "integration",
+    risk_class: str = "low",
     owns: tuple[str, ...] = ("scripts/vcs_reconciler.py",),
     do_not_touch: tuple[str, ...] = (),
 ) -> None:
@@ -380,7 +459,7 @@ def _insert_ticket(
                 "orchestration-core",
                 work_ledger.dumps_json(("objective-dag",)),
                 status,
-                "low",
+                risk_class,
                 "orchestration",
                 work_ledger.dumps_json(owns),
                 work_ledger.dumps_json(do_not_touch),

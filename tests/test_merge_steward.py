@@ -315,6 +315,43 @@ def test_contract_pit_doc_deletion_still_requires_safety_review() -> None:
     assert "PIT rule change" in decision.reason
 
 
+def test_planned_semantic_owned_change_queues() -> None:
+    issue = _issue(
+        "ARR-57",
+        description=(
+            "Ticket Role: implementation\n"
+            "Risk Class: semantic\n\n"
+            "Owns:\n"
+            "- `scripts/run_falsifier.py`\n"
+            "- `tests/test_run_falsifier_cli.py`\n\n"
+            "Do Not Touch:\n"
+            "- `db/migrations/`\n"
+        ),
+    )
+    pr = _pr(
+        68,
+        title="ARR-57 Stabilize deterministic falsifier run keys",
+        changed_files=_changed_files(
+            "scripts/run_falsifier.py",
+            "tests/test_run_falsifier_cli.py",
+        ),
+        diff=(
+            "+model_run_key = stable_digest(identity_payload)\n"
+            "+metrics[\"model_run_key\"] = model_run_key\n"
+        ),
+    )
+
+    decision = merge_steward.decide_issue_action(
+        issue,
+        pr,
+        ("Python 3.10 checks",),
+    )
+
+    assert decision.action == "queue"
+    assert "planned semantic change in ticket-owned paths" in decision.reason
+    assert "green" in decision.reason
+
+
 def test_routine_docs_and_tests_still_queue() -> None:
     issue = _issue("ARR-41")
     pr = _pr(
