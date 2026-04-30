@@ -43,6 +43,7 @@ CommandKind = Literal["import", "admit", "mirror", "vcs", "repair", "merge", "st
 RunnerActionName = Literal["noop", "transition", "skip"]
 
 RUNNER_TO_LEDGER_STATE = {
+    "Backlog": "Backlog",
     "Todo": "Ready",
     "In Progress": "In Progress",
     "Rework": "Rework",
@@ -353,14 +354,30 @@ def run_cycle(
     runner_actions.extend(observer.observe(config))
     blockers = safety_blockers(config.ledger)
     if blockers and config.stop_on_safety:
-        return CycleResult(
-            cycle=cycle,
-            command_results=tuple(command_results),
-            runner_actions=tuple(runner_actions),
-            blockers=blockers,
-            stopped=True,
-            stop_reason="safety blockers present before dispatch",
-        )
+        for command in safety_reconciliation_plan(config):
+            result = runner.run(command, cwd=config.root)
+            command_results.append(result)
+            if result.returncode != 0:
+                return CycleResult(
+                    cycle=cycle,
+                    command_results=tuple(command_results),
+                    runner_actions=tuple(runner_actions),
+                    blockers=safety_blockers(config.ledger),
+                    stopped=True,
+                    stop_reason=f"{command.kind} command failed",
+                )
+            if command.kind == "mirror":
+                runner_actions.extend(observer.observe(config))
+        blockers = safety_blockers(config.ledger)
+        if blockers:
+            return CycleResult(
+                cycle=cycle,
+                command_results=tuple(command_results),
+                runner_actions=tuple(runner_actions),
+                blockers=blockers,
+                stopped=True,
+                stop_reason="safety blockers present after VCS reconciliation",
+            )
 
     for command in command_plan(config):
         result = runner.run(command, cwd=config.root)
@@ -396,6 +413,38 @@ def run_cycle(
         blockers=blockers,
         stopped=stopped,
         stop_reason="safety blockers present" if stopped else None,
+    )
+
+
+def safety_reconciliation_plan(config: ControllerConfig) -> tuple[CommandSpec, ...]:
+    return (
+        CommandSpec(
+            "vcs",
+            command_args(
+                "vcs_reconciler.py",
+                "--ledger",
+                str(config.ledger),
+                "--repo",
+                config.repo,
+                "--limit",
+                str(config.limit),
+                *(("--apply",) if config.apply else ()),
+            ),
+        ),
+        CommandSpec(
+            "mirror",
+            command_args(
+                "linear_mirror.py",
+                "--ledger",
+                str(config.ledger),
+                "--project",
+                config.project,
+                "--limit",
+                str(config.limit),
+                *((("--team-id", config.team_id) if config.team_id else ())),
+                *(("--apply",) if config.apply else ()),
+            ),
+        ),
     )
 
 
@@ -596,6 +645,18 @@ def decide_runner_state_action(
             action="skip",
             target_status=target_status,
             reason="ledger admission is authoritative for Backlog tickets",
+        )
+    if ledger_status == "Blocked" or (
+        ledger_status == "Safety Review" and target_status != "Merging"
+    ):
+        return RunnerStateAction(
+            ticket_id=ticket_id,
+            linear_identifier=linear_identifier,
+            from_status=ledger_status,
+            linear_state=linear_state,
+            action="skip",
+            target_status=target_status,
+            reason="safety ledger state requires VCS evidence or Merging handoff",
         )
     if target_status == "Ready":
         return RunnerStateAction(

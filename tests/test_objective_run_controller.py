@@ -104,6 +104,18 @@ def test_runner_observation_advances_only_safe_runner_states() -> None:
         ledger_status="In Progress",
         linear_state="Done",
     )
+    safety_pullback = objective_run.decide_runner_state_action(
+        ticket_id="obj-005",
+        linear_identifier="ARR-5",
+        ledger_status="Safety Review",
+        linear_state="In Progress",
+    )
+    backlog_noop = objective_run.decide_runner_state_action(
+        ticket_id="obj-006",
+        linear_identifier="ARR-6",
+        ledger_status="Backlog",
+        linear_state="Backlog",
+    )
 
     assert transition.action == "transition"
     assert transition.target_status == "Merging"
@@ -113,6 +125,9 @@ def test_runner_observation_advances_only_safe_runner_states() -> None:
     assert "admission" in backlog_skip.reason
     assert unsafe_done.action == "skip"
     assert "VCS evidence" in unsafe_done.reason
+    assert safety_pullback.action == "skip"
+    assert "safety ledger" in safety_pullback.reason
+    assert backlog_noop.action == "noop"
 
 
 def test_apply_runner_state_actions_records_ledger_transitions(
@@ -173,6 +188,56 @@ def test_run_cycle_stops_when_a_command_fails(tmp_path: Path) -> None:
         "mirror",
         "vcs",
     ]
+
+
+def test_run_cycle_reconciles_safety_blocker_before_dispatch(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger.db"
+    _write_minimal_ledger(ledger, status="Safety Review")
+    config = _config(tmp_path, ledger=ledger, apply=True)
+    runner = _ClearingSafetyRunner(ledger)
+    observer = _FakeObserver(())
+
+    result = objective_run.run_cycle(
+        config,
+        cycle=1,
+        runner=runner,
+        observer=observer,
+    )
+
+    with objective_run.work_ledger.connect_existing(ledger) as connection:
+        ticket = objective_run.work_ledger.select_ticket(connection, "obj-001")
+
+    assert result.stopped is False
+    assert ticket.status == "Merging"
+    assert [item.kind for item in result.command_results[:4]] == [
+        "vcs",
+        "mirror",
+        "import",
+        "admit",
+    ]
+
+
+def test_run_cycle_stops_after_reconciliation_when_safety_remains(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger.db"
+    _write_minimal_ledger(ledger, status="Safety Review")
+    config = _config(tmp_path, ledger=ledger, apply=True)
+    runner = _FakeRunner()
+    observer = _FakeObserver(())
+
+    result = objective_run.run_cycle(
+        config,
+        cycle=1,
+        runner=runner,
+        observer=observer,
+    )
+
+    assert result.stopped is True
+    assert result.stop_reason == "safety blockers present after VCS reconciliation"
+    assert [item.kind for item in result.command_results] == ["vcs", "mirror"]
 
 
 def _config(
@@ -283,6 +348,29 @@ class _FakeRunner:
             returncode=1 if command.kind == self.fail_kind else 0,
             stdout="",
             stderr="failed" if command.kind == self.fail_kind else "",
+        )
+
+
+class _ClearingSafetyRunner:
+    def __init__(self, ledger: Path) -> None:
+        self.ledger = ledger
+
+    def run(self, command, *, cwd: Path):
+        if command.kind == "vcs":
+            with objective_run.work_ledger.connect_existing(self.ledger) as connection:
+                objective_run.work_ledger.transition_ticket(
+                    connection,
+                    ticket_id="obj-001",
+                    status="Merging",
+                    actor="test_vcs",
+                    message="planned safety allowance cleared",
+                )
+        return objective_run.CommandResult(
+            kind=command.kind,
+            argv=command.argv,
+            returncode=0,
+            stdout="",
+            stderr="",
         )
 
 
