@@ -13,6 +13,7 @@ from silver.analytics import (
     BacktestMetadataRepository,
     BacktestRunCreate,
     BacktestRunFinish,
+    AnalyticsRunRepository,
     ModelRunCreate,
     ModelRunFinish,
 )
@@ -137,6 +138,42 @@ def test_traceability_snapshot_resolves_backtest_run_to_model_run_metadata() -> 
     assert "br.label_scramble_metrics AS backtest_label_scramble_metrics" in sql
     assert "br.label_scramble_pass AS backtest_label_scramble_pass" in sql
     assert params == {"backtest_run_id": backtest.id}
+
+
+def test_analytics_run_lifecycle_stores_invocation_metadata_with_run_keys() -> None:
+    connection = FakeMetadataConnection()
+    repository = AnalyticsRunRepository(connection)
+
+    run = repository.create_run(
+        run_kind="falsifier_report_invocation",
+        code_git_sha="abcdef0",
+        available_at_policy_versions={"daily_price": 1},
+        parameters={
+            "invocation_id": "12345678-1234-5678-1234-567812345678",
+            "model_run_key": "model-run-1",
+            "backtest_run_key": "backtest-run-1",
+            "output_path": "reports/falsifier/week_1_momentum.md",
+            "process_id": 4321,
+        },
+        input_fingerprints={"joined_feature_label_rows_sha256": "f" * 64},
+        random_seed=0,
+    )
+    finished = repository.finish_run(run.id, status="succeeded")
+
+    assert run.run_kind == "falsifier_report_invocation"
+    assert run.status == "running"
+    assert finished.id == run.id
+    assert finished.status == "succeeded"
+    stored = connection.analytics_runs[run.id]
+    assert stored["status"] == "succeeded"
+    assert stored["parameters"]["invocation_id"] == (
+        "12345678-1234-5678-1234-567812345678"
+    )
+    assert stored["parameters"]["model_run_key"] == "model-run-1"
+    assert stored["parameters"]["backtest_run_key"] == "backtest-run-1"
+    assert stored["input_fingerprints"] == {
+        "joined_feature_label_rows_sha256": "f" * 64,
+    }
 
 
 def test_create_model_run_is_idempotent_for_same_key() -> None:
@@ -374,14 +411,21 @@ class FakeMetadataConnection:
     insert_model_sql = ""
 
     def __init__(self) -> None:
+        self.analytics_runs: dict[int, dict[str, Any]] = {}
         self.model_runs: dict[str, dict[str, Any]] = {}
         self.backtest_runs: dict[str, dict[str, Any]] = {}
         self.executed: list[tuple[str, dict[str, Any]]] = []
+        self._next_run_id = 1
         self._next_model_id = 1
         self._next_backtest_id = 101
 
     def cursor(self) -> FakeMetadataCursor:
         return FakeMetadataCursor(self)
+
+    def next_run_id(self) -> int:
+        value = self._next_run_id
+        self._next_run_id += 1
+        return value
 
     def next_model_id(self) -> int:
         value = self._next_model_id
@@ -407,6 +451,12 @@ class FakeMetadataCursor:
 
     def execute(self, sql: str, params: dict[str, Any]) -> None:
         self.connection.executed.append((sql, dict(params)))
+        if sql.startswith("INSERT INTO silver.analytics_runs"):
+            self._insert_analytics_run(params)
+            return
+        if sql.startswith("UPDATE silver.analytics_runs"):
+            self._finish_analytics_run(params)
+            return
         if sql.startswith("INSERT INTO silver.model_runs"):
             self.connection.insert_model_sql = sql
             self._insert_model_run(params)
@@ -433,6 +483,31 @@ class FakeMetadataCursor:
 
     def fetchone(self) -> dict[str, Any] | None:
         return self._one
+
+    def _insert_analytics_run(self, params: dict[str, Any]) -> None:
+        run_id = self.connection.next_run_id()
+        row = {
+            "id": run_id,
+            "run_kind": params["run_kind"],
+            "status": "running",
+            "code_git_sha": params["code_git_sha"],
+            "available_at_policy_versions": json.loads(
+                params["available_at_policy_versions"],
+            ),
+            "parameters": json.loads(params["parameters"]),
+            "input_fingerprints": json.loads(params["input_fingerprints"]),
+            "random_seed": params["random_seed"],
+        }
+        self.connection.analytics_runs[run_id] = row
+        self._one = row
+
+    def _finish_analytics_run(self, params: dict[str, Any]) -> None:
+        row = self.connection.analytics_runs.get(params["run_id"])
+        if row is None:
+            self._one = None
+            return
+        row["status"] = params["status"]
+        self._one = row
 
     def _insert_model_run(self, params: dict[str, Any]) -> None:
         key = params["model_run_key"]
