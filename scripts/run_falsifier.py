@@ -63,6 +63,7 @@ from silver.reference.seed_data import (  # noqa: E402
 from silver.reference.seed_data import FALSIFIER_UNIVERSE_NAME, load_seed_file  # noqa: E402
 from silver.reports.falsifier import (  # noqa: E402
     FalsifierDataCoverage,
+    FalsifierEvidence,
     FalsifierFeatureMetadata,
     FalsifierInputCounts,
     FalsifierModelWindow,
@@ -355,44 +356,6 @@ def run_report_with_metadata(
             step_sessions=DEFAULT_STEP_SESSIONS,
             round_trip_cost_bps=DEFAULT_ROUND_TRIP_COST_BPS,
         )
-        report = FalsifierReport(
-            strategy=args.strategy,
-            horizon=args.horizon,
-            universe_name=args.universe,
-            universe_members=persisted_inputs.universe_members,
-            data_coverage=data_coverage,
-            feature_metadata=FalsifierFeatureMetadata(
-                name=feature.name,
-                version=feature.version,
-                definition_hash=feature.definition_hash,
-                feature_set_hash=feature_set_hash,
-            ),
-            backtest_result=result,
-            reproducibility=FalsifierReproducibilityMetadata(
-                command=_target_command(args),
-                git_sha=git_sha,
-                input_fingerprint=input_fingerprint,
-                available_at_policy_versions=(
-                    persisted_inputs.available_at_policy_versions
-                ),
-                run_identity=FalsifierRunIdentity(
-                    model_run_id=model_run.id,
-                    model_run_key=model_run.model_run_key,
-                    backtest_run_id=backtest_run.id,
-                    backtest_run_key=backtest_run.backtest_run_key,
-                ),
-                model_window=FalsifierModelWindow(
-                    training_start_date=model_window.training_start_date,
-                    training_end_date=model_window.training_end_date,
-                    test_start_date=model_window.test_start_date,
-                    test_end_date=model_window.test_end_date,
-                    source=model_window.source,
-                ),
-                target_kind=persisted_inputs.target_kind,
-                random_seed=FALSIFIER_RANDOM_SEED,
-                execution_assumptions=_execution_assumptions(),
-            ),
-        )
     except Exception as exc:
         _finish_failed_metadata(
             metadata_repository,
@@ -415,6 +378,43 @@ def run_report_with_metadata(
         result=result,
         rows=persisted_inputs.rows,
         failure_message=None,
+    )
+    report = FalsifierReport(
+        strategy=args.strategy,
+        horizon=args.horizon,
+        universe_name=args.universe,
+        universe_members=persisted_inputs.universe_members,
+        data_coverage=data_coverage,
+        feature_metadata=FalsifierFeatureMetadata(
+            name=feature.name,
+            version=feature.version,
+            definition_hash=feature.definition_hash,
+            feature_set_hash=feature_set_hash,
+        ),
+        backtest_result=result,
+        reproducibility=FalsifierReproducibilityMetadata(
+            command=_target_command(args),
+            git_sha=git_sha,
+            input_fingerprint=input_fingerprint,
+            available_at_policy_versions=persisted_inputs.available_at_policy_versions,
+            run_identity=FalsifierRunIdentity(
+                model_run_id=model_run.id,
+                model_run_key=model_run.model_run_key,
+                backtest_run_id=backtest_run.id,
+                backtest_run_key=backtest_run.backtest_run_key,
+            ),
+            model_window=FalsifierModelWindow(
+                training_start_date=model_window.training_start_date,
+                training_end_date=model_window.training_end_date,
+                test_start_date=model_window.test_start_date,
+                test_end_date=model_window.test_end_date,
+                source=model_window.source,
+            ),
+            target_kind=persisted_inputs.target_kind,
+            random_seed=FALSIFIER_RANDOM_SEED,
+            execution_assumptions=_execution_assumptions(),
+        ),
+        evidence=_report_evidence(backtest_finish),
     )
     finished_model = _finish_or_reuse_model_run(
         metadata_repository,
@@ -578,6 +578,17 @@ def _backtest_run_finish(
         label_scramble_metrics=label_scramble_metrics,
         label_scramble_pass=label_scramble_pass,
         multiple_comparisons_correction=MULTIPLE_COMPARISONS_CORRECTION,
+    )
+
+
+def _report_evidence(backtest_finish: BacktestRunFinish) -> FalsifierEvidence:
+    return FalsifierEvidence(
+        metrics_by_regime=backtest_finish.metrics_by_regime,
+        label_scramble_metrics=backtest_finish.label_scramble_metrics,
+        label_scramble_pass=backtest_finish.label_scramble_pass,
+        multiple_comparisons_correction=(
+            backtest_finish.multiple_comparisons_correction
+        ),
     )
 
 
