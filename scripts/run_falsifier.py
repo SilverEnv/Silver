@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -22,6 +23,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from silver.analytics import (  # noqa: E402
+    AnalyticsRunRecord,
+    AnalyticsRunRepository,
     BacktestMetadataRepository,
     BacktestRunCreate,
     BacktestRunFinish,
@@ -82,6 +85,7 @@ from silver.time.trading_calendar import TradingCalendar, load_seed_csv  # noqa:
 DEFAULT_OUTPUT_PATH = ROOT / "reports" / "falsifier" / "week_1_momentum.md"
 TARGET_STRATEGY = MOMENTUM_12_1_DEFINITION.name
 FALSIFIER_MODEL_RUN_NAME = "Momentum 12-1 falsifier"
+FALSIFIER_INVOCATION_RUN_KIND = "falsifier_report_invocation"
 FALSIFIER_RANDOM_SEED = 0
 TARGET_COMMAND_TEMPLATE = (
     "python scripts/run_falsifier.py --strategy {strategy} --horizon {horizon} "
@@ -272,6 +276,7 @@ def run_report(args: argparse.Namespace) -> None:
                 args,
                 client=client,
                 metadata_repository=BacktestMetadataRepository(connection),
+                invocation_repository=AnalyticsRunRepository(connection),
                 calendar=calendar,
             )
         except Exception:
@@ -294,6 +299,7 @@ def run_report_with_metadata(
     client: PsqlJsonClient,
     metadata_repository: BacktestMetadataRepository,
     calendar: TradingCalendar,
+    invocation_repository: AnalyticsRunRepository | None = None,
 ) -> FalsifierReportRun:
     persisted_inputs = load_persisted_inputs(
         client,
@@ -328,6 +334,15 @@ def run_report_with_metadata(
             model_run=model_run,
             persisted_inputs=persisted_inputs,
         )
+    )
+    invocation_run = _create_invocation_run(
+        invocation_repository,
+        args,
+        git_sha=git_sha,
+        input_fingerprint=input_fingerprint,
+        model_run=model_run,
+        backtest_run=backtest_run,
+        persisted_inputs=persisted_inputs,
     )
 
     try:
@@ -385,6 +400,11 @@ def run_report_with_metadata(
             backtest_run=backtest_run,
             error=exc,
         )
+        _finish_invocation_run(
+            invocation_repository,
+            invocation_run,
+            status="failed",
+        )
         raise
 
     model_finish = ModelRunFinish(
@@ -396,13 +416,15 @@ def run_report_with_metadata(
         rows=persisted_inputs.rows,
         failure_message=None,
     )
-    finished_model = metadata_repository.finish_model_run(
-        model_run.id,
-        model_finish,
+    finished_model = _finish_or_reuse_model_run(
+        metadata_repository,
+        model_run=model_run,
+        finish=model_finish,
     )
-    finished_backtest = metadata_repository.finish_backtest_run(
-        backtest_run.id,
-        backtest_finish,
+    finished_backtest = _finish_or_reuse_backtest_run(
+        metadata_repository,
+        backtest_run=backtest_run,
+        finish=backtest_finish,
     )
     validate_falsifier_report_traceability(
         report,
@@ -410,6 +432,11 @@ def run_report_with_metadata(
         expected_backtest_finish=backtest_finish,
     )
     write_report(args.output_path, render_week_1_momentum_report(report))
+    _finish_invocation_run(
+        invocation_repository,
+        invocation_run,
+        status="succeeded",
+    )
     return FalsifierReportRun(
         model_run=finished_model,
         backtest_run=finished_backtest,
@@ -484,12 +511,9 @@ def _backtest_run_create(
         cost_assumptions=_cost_assumptions(None),
         parameters={
             "command": _target_command(args),
-            "feature_definition": {
-                "definition_hash": persisted_inputs.feature_definition.definition_hash,
-                "id": persisted_inputs.feature_definition.id,
-                "name": persisted_inputs.feature_definition.name,
-                "version": persisted_inputs.feature_definition.version,
-            },
+            "feature_definition": _feature_definition_parameters(
+                persisted_inputs.feature_definition,
+            ),
             "label_scramble_alpha": LABEL_SCRAMBLE_ALPHA,
             "label_scramble_seed": DEFAULT_LABEL_SCRAMBLE_SEED,
             "label_scramble_trial_count": DEFAULT_LABEL_SCRAMBLE_TRIAL_COUNT,
@@ -497,7 +521,6 @@ def _backtest_run_create(
             "min_train_sessions": DEFAULT_MIN_TRAIN_SESSIONS,
             "model_run_key": model_run.model_run_key,
             "multiple_comparisons_correction": MULTIPLE_COMPARISONS_CORRECTION,
-            "output_path": _display_path(args.output_path),
             "step_sessions": DEFAULT_STEP_SESSIONS,
             "strategy": args.strategy,
             "target_kind": persisted_inputs.target_kind,
@@ -510,12 +533,24 @@ def _backtest_run_create(
 
 def _backtest_run_key(args: argparse.Namespace, model_run_key: str) -> str:
     payload = {
-        "command": _target_command(args),
+        "contract": "falsifier-backtest-run-identity",
+        "cost_assumptions": _cost_assumptions(None),
         "horizon": args.horizon,
+        "label_scramble": {
+            "alpha": LABEL_SCRAMBLE_ALPHA,
+            "seed": DEFAULT_LABEL_SCRAMBLE_SEED,
+            "trial_count": DEFAULT_LABEL_SCRAMBLE_TRIAL_COUNT,
+        },
         "model_run_key": model_run_key,
+        "multiple_comparisons_correction": MULTIPLE_COMPARISONS_CORRECTION,
         "strategy": args.strategy,
         "universe": args.universe,
-        "version": 1,
+        "walk_forward": {
+            "min_train_sessions": DEFAULT_MIN_TRAIN_SESSIONS,
+            "step_sessions": DEFAULT_STEP_SESSIONS,
+            "test_sessions": DEFAULT_TEST_SESSIONS,
+        },
+        "version": 2,
     }
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -553,24 +588,119 @@ def _finish_failed_metadata(
     backtest_run: BacktestRunRecord,
     error: Exception,
 ) -> None:
-    metadata_repository.finish_model_run(
-        model_run.id,
-        ModelRunFinish(
-            status="failed",
-            metrics={
-                "error_message": str(error),
-                "error_type": type(error).__name__,
-            },
+    if model_run.status == "running":
+        metadata_repository.finish_model_run(
+            model_run.id,
+            ModelRunFinish(
+                status="failed",
+                metrics={
+                    "error_message": str(error),
+                    "error_type": type(error).__name__,
+                },
+            ),
+        )
+    if backtest_run.status == "running":
+        metadata_repository.finish_backtest_run(
+            backtest_run.id,
+            _backtest_run_finish(
+                result=None,
+                rows=(),
+                failure_message=str(error),
+            ),
+        )
+
+
+def _create_invocation_run(
+    invocation_repository: AnalyticsRunRepository | None,
+    args: argparse.Namespace,
+    *,
+    git_sha: str,
+    input_fingerprint: str,
+    model_run: ModelRunRecord,
+    backtest_run: BacktestRunRecord,
+    persisted_inputs: PersistedFalsifierInputs,
+) -> AnalyticsRunRecord | None:
+    if invocation_repository is None:
+        return None
+    return invocation_repository.create_run(
+        run_kind=FALSIFIER_INVOCATION_RUN_KIND,
+        code_git_sha=git_sha,
+        available_at_policy_versions=persisted_inputs.available_at_policy_versions,
+        parameters=_invocation_parameters(
+            args,
+            model_run=model_run,
+            backtest_run=backtest_run,
         ),
+        input_fingerprints={
+            "joined_feature_label_rows_sha256": input_fingerprint,
+        },
+        random_seed=FALSIFIER_RANDOM_SEED,
     )
-    metadata_repository.finish_backtest_run(
-        backtest_run.id,
-        _backtest_run_finish(
-            result=None,
-            rows=(),
-            failure_message=str(error),
-        ),
-    )
+
+
+def _invocation_parameters(
+    args: argparse.Namespace,
+    *,
+    model_run: ModelRunRecord,
+    backtest_run: BacktestRunRecord,
+) -> dict[str, object]:
+    return {
+        "backtest_run_id": backtest_run.id,
+        "backtest_run_key": backtest_run.backtest_run_key,
+        "command": _target_command(args),
+        "horizon": args.horizon,
+        "invocation_id": str(uuid.uuid4()),
+        "metadata_role": "falsifier_invocation",
+        "model_run_id": model_run.id,
+        "model_run_key": model_run.model_run_key,
+        "output_path": _display_path(args.output_path),
+        "process_id": os.getpid(),
+        "strategy": args.strategy,
+        "universe": args.universe,
+    }
+
+
+def _finish_invocation_run(
+    invocation_repository: AnalyticsRunRepository | None,
+    invocation_run: AnalyticsRunRecord | None,
+    *,
+    status: str,
+) -> AnalyticsRunRecord | None:
+    if invocation_repository is None or invocation_run is None:
+        return None
+    return invocation_repository.finish_run(invocation_run.id, status=status)
+
+
+def _finish_or_reuse_model_run(
+    metadata_repository: BacktestMetadataRepository,
+    *,
+    model_run: ModelRunRecord,
+    finish: ModelRunFinish,
+) -> ModelRunRecord:
+    if model_run.status == "running":
+        return metadata_repository.finish_model_run(model_run.id, finish)
+    if model_run.status != finish.status:
+        raise FalsifierCliError(
+            f"model_run_key {model_run.model_run_key} already has status "
+            f"{model_run.status}; rerun produced {finish.status}"
+        )
+    return model_run
+
+
+def _finish_or_reuse_backtest_run(
+    metadata_repository: BacktestMetadataRepository,
+    *,
+    backtest_run: BacktestRunRecord,
+    finish: BacktestRunFinish,
+) -> BacktestRunRecord:
+    if backtest_run.status == "running":
+        return metadata_repository.finish_backtest_run(backtest_run.id, finish)
+    if backtest_run.status != finish.status:
+        raise FalsifierCliError(
+            f"backtest_run_key {backtest_run.backtest_run_key} already has status "
+            f"{backtest_run.status}; rerun produced {finish.status}"
+        )
+    return backtest_run
 
 
 def _cost_assumptions(result: MomentumFalsifierResult | None) -> dict[str, object]:
@@ -1193,7 +1323,6 @@ def _model_run_create(
             feature_set_hash=feature_set_hash,
             git_sha=git_sha,
             input_fingerprint=input_fingerprint,
-            parameters=parameters,
             target_kind=persisted_inputs.target_kind,
             window=window,
         ),
@@ -1212,33 +1341,11 @@ def _model_run_create(
         available_at_policy_versions=(
             persisted_inputs.available_at_policy_versions
         ),
-        input_fingerprints={
-            "asof_end": (
-                None
-                if data_coverage.asof_end is None
-                else data_coverage.asof_end.isoformat()
-            ),
-            "asof_start": (
-                None
-                if data_coverage.asof_start is None
-                else data_coverage.asof_start.isoformat()
-            ),
-            "distinct_asof_dates": data_coverage.distinct_asof_dates,
-            "distinct_tickers": data_coverage.distinct_tickers,
-            "horizon_end": (
-                None
-                if data_coverage.horizon_end is None
-                else data_coverage.horizon_end.isoformat()
-            ),
-            "horizon_start": (
-                None
-                if data_coverage.horizon_start is None
-                else data_coverage.horizon_start.isoformat()
-            ),
-            "joined_feature_label_rows_sha256": input_fingerprint,
-            "row_count": data_coverage.input_rows,
-            "universe_member_count": len(persisted_inputs.universe_members),
-        },
+        input_fingerprints=_model_run_input_fingerprints(
+            persisted_inputs=persisted_inputs,
+            input_fingerprint=input_fingerprint,
+            data_coverage=data_coverage,
+        ),
     )
 
 
@@ -1250,18 +1357,60 @@ def _model_run_parameters(
 ) -> dict[str, object]:
     return {
         "command": _target_command(args),
-        "feature_definition": {
-            "definition_hash": persisted_inputs.feature_definition.definition_hash,
-            "id": persisted_inputs.feature_definition.id,
-            "name": persisted_inputs.feature_definition.name,
-            "version": persisted_inputs.feature_definition.version,
-        },
+        "feature_definition": _feature_definition_parameters(
+            persisted_inputs.feature_definition,
+        ),
         "min_train_sessions": DEFAULT_MIN_TRAIN_SESSIONS,
         "step_sessions": DEFAULT_STEP_SESSIONS,
         "strategy": args.strategy,
         "test_sessions": DEFAULT_TEST_SESSIONS,
         "universe": args.universe,
         "window_source": window.source,
+    }
+
+
+def _feature_definition_parameters(
+    feature_definition: FeatureDefinitionRecord,
+) -> dict[str, object]:
+    return {
+        "definition_hash": feature_definition.definition_hash,
+        "name": feature_definition.name,
+        "version": feature_definition.version,
+    }
+
+
+def _model_run_input_fingerprints(
+    *,
+    persisted_inputs: PersistedFalsifierInputs,
+    input_fingerprint: str,
+    data_coverage: FalsifierDataCoverage,
+) -> dict[str, object]:
+    return {
+        "asof_end": (
+            None
+            if data_coverage.asof_end is None
+            else data_coverage.asof_end.isoformat()
+        ),
+        "asof_start": (
+            None
+            if data_coverage.asof_start is None
+            else data_coverage.asof_start.isoformat()
+        ),
+        "distinct_asof_dates": data_coverage.distinct_asof_dates,
+        "distinct_tickers": data_coverage.distinct_tickers,
+        "horizon_end": (
+            None
+            if data_coverage.horizon_end is None
+            else data_coverage.horizon_end.isoformat()
+        ),
+        "horizon_start": (
+            None
+            if data_coverage.horizon_start is None
+            else data_coverage.horizon_start.isoformat()
+        ),
+        "joined_feature_label_rows_sha256": input_fingerprint,
+        "row_count": data_coverage.input_rows,
+        "universe_member_count": len(persisted_inputs.universe_members),
     }
 
 
@@ -1272,27 +1421,32 @@ def _model_run_key(
     feature_set_hash: str,
     git_sha: str,
     input_fingerprint: str,
-    parameters: Mapping[str, object],
     target_kind: str,
     window: ModelRunWindow,
 ) -> str:
     payload = {
         "available_at_policy_versions": dict(available_at_policy_versions),
+        "contract": "falsifier-model-run-identity",
         "cost_assumptions": _model_run_cost_assumptions(),
         "feature_set_hash": feature_set_hash,
         "git_sha": git_sha,
         "horizon": args.horizon,
         "input_fingerprint": input_fingerprint,
-        "parameters": dict(parameters),
+        "run_config": {
+            "min_train_sessions": DEFAULT_MIN_TRAIN_SESSIONS,
+            "step_sessions": DEFAULT_STEP_SESSIONS,
+            "strategy": args.strategy,
+            "test_sessions": DEFAULT_TEST_SESSIONS,
+            "universe": args.universe,
+        },
         "random_seed": FALSIFIER_RANDOM_SEED,
-        "strategy": args.strategy,
         "target_kind": target_kind,
         "test_end_date": window.test_end_date.isoformat(),
         "test_start_date": window.test_start_date.isoformat(),
         "training_end_date": window.training_end_date.isoformat(),
         "training_start_date": window.training_start_date.isoformat(),
-        "universe": args.universe,
-        "version": 2,
+        "window_source": window.source,
+        "version": 3,
     }
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

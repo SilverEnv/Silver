@@ -6,6 +6,7 @@ import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -208,10 +209,205 @@ def test_model_run_create_uses_stable_key_for_same_frozen_metadata(
         data_coverage=data_coverage,
         window=model_window,
     )
+    changed_surrogate_id_inputs = cli.PersistedFalsifierInputs(
+        universe_members=persisted_inputs.universe_members,
+        feature_definition=cli.FeatureDefinitionRecord(
+            id=999,
+            name=persisted_inputs.feature_definition.name,
+            version=persisted_inputs.feature_definition.version,
+            definition_hash=persisted_inputs.feature_definition.definition_hash,
+        ),
+        rows=persisted_inputs.rows,
+        available_at_policy_versions=persisted_inputs.available_at_policy_versions,
+        target_kind=persisted_inputs.target_kind,
+    )
+    changed_surrogate_id = cli._model_run_create(
+        args,
+        persisted_inputs=changed_surrogate_id_inputs,
+        feature_set_hash=feature_set_hash,
+        git_sha="abcdef0",
+        input_fingerprint=input_fingerprint,
+        data_coverage=data_coverage,
+        window=model_window,
+    )
 
     assert first.model_run_key == second.model_run_key
     assert first.parameters == second.parameters
     assert first.model_run_key != changed_input.model_run_key
+    assert first.model_run_key == changed_surrogate_id.model_run_key
+    assert first.parameters == changed_surrogate_id.parameters
+
+
+def test_deterministic_run_payloads_ignore_invocation_output_path(
+    tmp_path: Path,
+) -> None:
+    calendar = _calendar()
+    rows = _momentum_rows(calendar, session_count=420)
+    persisted_inputs = _persisted_inputs(rows=rows)
+    first_args = cli.parse_args(
+        [
+            "--database-url",
+            "postgresql://user:pass@localhost/silver",
+            "--output-path",
+            str(tmp_path / "first.md"),
+        ]
+    )
+    second_args = cli.parse_args(
+        [
+            "--database-url",
+            "postgresql://user:pass@localhost/silver",
+            "--output-path",
+            str(tmp_path / "second.md"),
+        ]
+    )
+    feature_set_hash = cli._feature_set_hash(persisted_inputs.feature_definition)
+    input_fingerprint = cli.fingerprint_momentum_inputs(rows)
+    data_coverage = cli.coverage_from_rows(rows)
+    model_window = cli._model_run_window(
+        persisted_inputs.rows,
+        calendar=calendar,
+        horizon=first_args.horizon,
+    )
+
+    first_model = cli._model_run_create(
+        first_args,
+        persisted_inputs=persisted_inputs,
+        feature_set_hash=feature_set_hash,
+        git_sha="abcdef0",
+        input_fingerprint=input_fingerprint,
+        data_coverage=data_coverage,
+        window=model_window,
+    )
+    second_model = cli._model_run_create(
+        second_args,
+        persisted_inputs=persisted_inputs,
+        feature_set_hash=feature_set_hash,
+        git_sha="abcdef0",
+        input_fingerprint=input_fingerprint,
+        data_coverage=data_coverage,
+        window=model_window,
+    )
+    model_record = cli.ModelRunRecord(
+        id=1,
+        model_run_key=first_model.model_run_key,
+        status="running",
+    )
+    first_backtest = cli._backtest_run_create(
+        first_args,
+        model_run=model_record,
+        persisted_inputs=persisted_inputs,
+    )
+    second_backtest = cli._backtest_run_create(
+        second_args,
+        model_run=model_record,
+        persisted_inputs=persisted_inputs,
+    )
+
+    assert first_model.model_run_key == second_model.model_run_key
+    assert first_model.parameters == second_model.parameters
+    assert first_backtest.backtest_run_key == second_backtest.backtest_run_key
+    assert first_backtest.parameters == second_backtest.parameters
+    assert "output_path" not in first_backtest.parameters
+
+
+def test_report_run_records_invocation_metadata_outside_deterministic_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calendar = _calendar()
+    rows = _momentum_rows(calendar, session_count=420)
+    repo = FakeMetadataRepository()
+    invocation_repo = FakeInvocationRepository()
+    args = cli.parse_args(
+        [
+            "--database-url",
+            "postgresql://user:pass@localhost/silver",
+            "--output-path",
+            str(tmp_path / "report.md"),
+        ]
+    )
+    invocation_id = UUID("12345678-1234-5678-1234-567812345678")
+    monkeypatch.setattr(cli, "_git_sha", lambda: "abcdef0")
+    monkeypatch.setattr(cli.uuid, "uuid4", lambda: invocation_id)
+    monkeypatch.setattr(cli.os, "getpid", lambda: 4321)
+    monkeypatch.setattr(cli, "run_label_scramble", _fake_label_scramble)
+    monkeypatch.setattr(
+        cli,
+        "load_persisted_inputs",
+        lambda *_args, **_kwargs: _persisted_inputs(rows=rows),
+    )
+
+    outcome = cli.run_report_with_metadata(
+        args,
+        client=object(),
+        metadata_repository=repo,
+        invocation_repository=invocation_repo,
+        calendar=calendar,
+    )
+
+    assert outcome.status == "succeeded"
+    assert len(invocation_repo.creates) == 1
+    assert invocation_repo.finishes == [(7, "succeeded")]
+    invocation = invocation_repo.creates[0]
+    invocation_parameters = invocation["parameters"]
+    assert invocation["run_kind"] == "falsifier_report_invocation"
+    assert invocation["code_git_sha"] == "abcdef0"
+    assert invocation["random_seed"] == 0
+    assert invocation["input_fingerprints"] == {
+        "joined_feature_label_rows_sha256": repo.model_creates[0].input_fingerprints[
+            "joined_feature_label_rows_sha256"
+        ],
+    }
+    assert invocation_parameters["invocation_id"] == str(invocation_id)
+    assert invocation_parameters["process_id"] == 4321
+    assert invocation_parameters["output_path"] == cli._display_path(args.output_path)
+    assert invocation_parameters["model_run_key"] == repo.model_creates[0].model_run_key
+    assert (
+        invocation_parameters["backtest_run_key"]
+        == repo.backtest_creates[0].backtest_run_key
+    )
+    assert str(invocation_id) not in repo.model_creates[0].model_run_key
+    assert "invocation_id" not in repo.model_creates[0].parameters
+    assert "output_path" not in repo.backtest_creates[0].parameters
+
+
+def test_deterministic_rerun_reuses_terminal_metadata_rows() -> None:
+    repo = FakeMetadataRepository()
+    model = cli.ModelRunRecord(
+        id=1,
+        model_run_key="model-run-1",
+        status="succeeded",
+    )
+    backtest = cli.BacktestRunRecord(
+        id=2,
+        backtest_run_key="backtest-run-1",
+        status="succeeded",
+    )
+
+    reused_model = cli._finish_or_reuse_model_run(
+        repo,
+        model_run=model,
+        finish=cli.ModelRunFinish(status="succeeded", metrics={"split_count": 3}),
+    )
+    reused_backtest = cli._finish_or_reuse_backtest_run(
+        repo,
+        backtest_run=backtest,
+        finish=cli.BacktestRunFinish(
+            status="succeeded",
+            cost_assumptions={"round_trip_cost_bps": 20.0},
+            metrics={"status": "succeeded"},
+            metrics_by_regime={"all": {"count": 1}},
+            baseline_metrics={"equal_weight": {"mean_net_horizon_return": 0.01}},
+            label_scramble_metrics={"p_value": 0.01},
+            label_scramble_pass=True,
+            multiple_comparisons_correction="none",
+        ),
+    )
+
+    assert reused_model == model
+    assert reused_backtest == backtest
+    assert repo.model_finishes == []
+    assert repo.backtest_finishes == []
 
 
 def test_report_traceability_validation_fails_clearly_on_metadata_mismatch(
@@ -778,3 +974,25 @@ class FakeMetadataRepository:
         }
         values.update(self.traceability_overrides)
         return cli.BacktestTraceabilitySnapshot(**values)
+
+
+class FakeInvocationRepository:
+    def __init__(self) -> None:
+        self.creates: list[dict[str, Any]] = []
+        self.finishes: list[tuple[int, str]] = []
+
+    def create_run(self, **kwargs: Any) -> Any:
+        self.creates.append(kwargs)
+        return cli.AnalyticsRunRecord(
+            id=7,
+            run_kind=kwargs["run_kind"],
+            status="running",
+        )
+
+    def finish_run(self, run_id: int, *, status: str) -> Any:
+        self.finishes.append((run_id, status))
+        return cli.AnalyticsRunRecord(
+            id=run_id,
+            run_kind=self.creates[0]["run_kind"],
+            status=status,
+        )
