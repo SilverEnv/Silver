@@ -59,6 +59,7 @@ from silver.reference.seed_data import (  # noqa: E402
 from silver.reference.seed_data import FALSIFIER_UNIVERSE_NAME, load_seed_file  # noqa: E402
 from silver.reports.falsifier import (  # noqa: E402
     FalsifierDataCoverage,
+    FalsifierEvidence,
     FalsifierFeatureMetadata,
     FalsifierInputCounts,
     FalsifierModelWindow,
@@ -339,6 +340,11 @@ def run_report_with_metadata(
             step_sessions=DEFAULT_STEP_SESSIONS,
             round_trip_cost_bps=DEFAULT_ROUND_TRIP_COST_BPS,
         )
+        backtest_finish = _backtest_run_finish(
+            result=result,
+            rows=persisted_inputs.rows,
+            failure_message=None,
+        )
         report = FalsifierReport(
             strategy=args.strategy,
             horizon=args.horizon,
@@ -376,6 +382,14 @@ def run_report_with_metadata(
                 random_seed=FALSIFIER_RANDOM_SEED,
                 execution_assumptions=_execution_assumptions(),
             ),
+            evidence=FalsifierEvidence(
+                metrics_by_regime=backtest_finish.metrics_by_regime,
+                label_scramble_metrics=backtest_finish.label_scramble_metrics,
+                label_scramble_pass=backtest_finish.label_scramble_pass,
+                multiple_comparisons_correction=(
+                    backtest_finish.multiple_comparisons_correction
+                ),
+            ),
         )
     except Exception as exc:
         _finish_failed_metadata(
@@ -389,11 +403,6 @@ def run_report_with_metadata(
     model_finish = ModelRunFinish(
         status=result.status,
         metrics=_model_run_metrics(result),
-    )
-    backtest_finish = _backtest_run_finish(
-        result=result,
-        rows=persisted_inputs.rows,
-        failure_message=None,
     )
     finished_model = metadata_repository.finish_model_run(
         model_run.id,
@@ -748,6 +757,8 @@ def _label_scramble_payload(
     payload = scramble_result.to_dict()
     payload["status"] = "completed"
     payload["alpha"] = LABEL_SCRAMBLE_ALPHA
+    payload["scored_row_source"] = "joined_feature_label_rows"
+    payload["selection_rule"] = "rank_correlation_feature_value_vs_label_by_asof_date"
     return (
         payload,
         result.status == "succeeded" and scramble_result.p_value <= LABEL_SCRAMBLE_ALPHA,

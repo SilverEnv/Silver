@@ -146,10 +146,22 @@ def test_report_run_creates_and_finishes_model_and_backtest_success(
     ) in report_text
     assert "| Target kind | excess_return_market |" in report_text
     assert "| Random seed | 0 |" in report_text
+    assert "## Regime Breakdown" in report_text
+    assert "| Metadata field | backtest_runs.metrics_by_regime |" in report_text
+    assert "## Label-Scramble Result" in report_text
+    assert "| Metadata field | backtest_runs.label_scramble_metrics |" in report_text
+    assert "| Scored-row source | joined_feature_label_rows |" in report_text
+    assert (
+        "| Selection rule | "
+        "rank_correlation_feature_value_vs_label_by_asof_date |"
+    ) in report_text
+    assert "| P-value | 0.010000 |" in report_text
+    assert "| Pass/fail | pass |" in report_text
+    assert "| Multiple-comparisons correction | none |" in report_text
     assert '"label_scramble_seed":44' in report_text
     assert '"min_train_sessions":252' in report_text
     assert '"round_trip_cost_bps":20.0' in report_text
-    assert "| Report schema version | 3 |" in report_text
+    assert "| Report schema version | 4 |" in report_text
 
 
 def test_model_run_create_uses_stable_key_for_same_frozen_metadata(
