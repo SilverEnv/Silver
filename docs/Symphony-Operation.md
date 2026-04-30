@@ -891,6 +891,13 @@ the ticket explicitly owns. That exception is narrow: code changes, deletions,
 scope drift, destructive behavior, paid/live behavior, and secret handling still
 stop for Safety Review.
 
+Approved semantic implementation tickets may proceed through normal merge-state
+checks when the semantic trigger is limited to files the ticket explicitly owns.
+That means an owned semantic PR can still move to `Rework` for conflicts or
+failed checks without being misrouted to Safety Review. Once a ticket is in
+`Rework`, VCS reconciliation waits for the repair lane to move it back to
+`Merging` before reclassifying the PR.
+
 ## Automation Ladder
 
 Do not jump straight to overnight autonomy. Increase automation only after the

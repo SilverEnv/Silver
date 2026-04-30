@@ -574,6 +574,9 @@ Done when:
 - Planned contract tickets can pass additive docs-only contract clarifications
   inside their declared ownership while preserving Safety Review for code,
   deletion, destructive, secret, paid/live, or scope-drift risk.
+- Approved semantic implementation tickets can pass safety classification when
+  changes stay inside declared ownership, then still route to Rework for merge
+  conflicts or failed checks.
 
 ### Stage 9: Portability Extraction
 

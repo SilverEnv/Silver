@@ -641,7 +641,7 @@ def decide_issue_action(
     safety_allowance: str | None = None
     safety_trigger = safety_review_trigger(issue, pr)
     if safety_trigger is not None:
-        safety_allowance = planned_contract_safety_allowance(
+        safety_allowance = planned_objective_safety_allowance(
             issue,
             pr,
             safety_trigger,
@@ -894,6 +894,17 @@ def safety_review_trigger(issue: LinearIssue, pr: PullRequest) -> str | None:
     return None
 
 
+def planned_objective_safety_allowance(
+    issue: LinearIssue,
+    pr: PullRequest,
+    safety_trigger: str,
+) -> str | None:
+    contract_allowance = planned_contract_safety_allowance(issue, pr, safety_trigger)
+    if contract_allowance is not None:
+        return contract_allowance
+    return planned_semantic_safety_allowance(issue, pr, safety_trigger)
+
+
 def planned_contract_safety_allowance(
     issue: LinearIssue,
     pr: PullRequest,
@@ -936,6 +947,52 @@ def planned_contract_safety_allowance(
     )
 
 
+def planned_semantic_safety_allowance(
+    issue: LinearIssue,
+    pr: PullRequest,
+    safety_trigger: str,
+) -> str | None:
+    if issue_risk_class(issue.description) != "semantic":
+        return None
+    if issue_ticket_role(issue.description) not in {
+        "contract",
+        "implementation",
+        "integration",
+    }:
+        return None
+    if "PR metadata" in safety_trigger:
+        return None
+    if not safety_trigger.startswith(
+        (
+            "feature semantic change:",
+            "label semantic change:",
+            "backtest metric semantic change:",
+        )
+    ):
+        return None
+
+    changed_files = tuple(pr.changed_files)
+    if not changed_files:
+        return None
+    paths = tuple(
+        normalized
+        for changed_file in changed_files
+        if (normalized := _normalize_path(changed_file.path))
+    )
+    owns = issue_section_paths(issue.description, "Owns")
+    if not owns or not paths or not all(_path_is_covered(path, owns) for path in paths):
+        return None
+
+    do_not_touch = issue_section_paths(issue.description, "Do Not Touch")
+    if any(_path_is_covered(path, do_not_touch) for path in paths):
+        return None
+
+    return (
+        "planned semantic change in ticket-owned paths "
+        f"(original trigger: {safety_trigger})"
+    )
+
+
 def decision_reason(prefix: str | None, reason: str) -> str:
     if prefix is None:
         return reason
@@ -947,6 +1004,13 @@ def issue_ticket_role(description: str) -> str:
     if match is None:
         return ""
     return match.group("role").strip().lower().replace(" ", "-")
+
+
+def issue_risk_class(description: str) -> str:
+    match = re.search(r"(?im)^Risk Class:\s*`?(?P<risk>[a-z_ -]+)`?\s*$", description)
+    if match is None:
+        return ""
+    return match.group("risk").strip().lower().replace(" ", "-")
 
 
 def issue_section_paths(description: str, heading: str) -> tuple[str, ...]:

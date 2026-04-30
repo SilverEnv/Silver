@@ -339,7 +339,7 @@ def classify_pr(
         issue = linear_issue_for_ticket(ticket)
         safety_trigger = merge_steward.safety_review_trigger(issue, pr)
         allowance = (
-            objective_contract_allowance(ticket, pr, safety_trigger)
+            objective_safety_allowance(ticket, pr, safety_trigger)
             if safety_trigger is not None
             else None
         )
@@ -365,6 +365,16 @@ def classify_pr(
             target_status=None,
             reason="ticket is Blocked; VCS reconciliation will not unblock it",
         )
+    if ticket.status == work_ledger.TICKET_STATUS_REWORK and (
+        pr.state != "MERGED" and not pr.merged_at
+    ):
+        return build_action(
+            ticket,
+            pr,
+            action="wait",
+            target_status=None,
+            reason="ticket is already in Rework",
+        )
 
     issue = linear_issue_for_ticket(ticket)
     decision = merge_steward.decide_issue_action(issue, pr, required_checks)
@@ -378,7 +388,7 @@ def classify_pr(
             reason=decision.reason,
         )
     if decision.action == "move_safety_review":
-        allowance = objective_contract_allowance(ticket, pr, decision.reason)
+        allowance = objective_safety_allowance(ticket, pr, decision.reason)
         if allowance is not None:
             return classify_allowed_contract_pr(
                 ticket,
@@ -505,13 +515,13 @@ def classify_allowed_contract_pr(
     )
 
 
-def objective_contract_allowance(
+def objective_safety_allowance(
     ticket: TicketRecord,
     pr: merge_steward.PullRequest,
     safety_reason: str,
 ) -> str | None:
     issue = linear_issue_for_ticket(ticket)
-    return merge_steward.planned_contract_safety_allowance(issue, pr, safety_reason)
+    return merge_steward.planned_objective_safety_allowance(issue, pr, safety_reason)
 
 
 def linear_issue_for_ticket(ticket: TicketRecord) -> merge_steward.LinearIssue:
