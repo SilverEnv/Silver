@@ -209,6 +209,36 @@ Validation:
 - `python -m pytest`
 - `ruff check .`
 
+ARR-64 Validation Evidence:
+- Date: 2026-04-30.
+- No live FMP calls were made. Focused validation used mocked
+  `FMPTransportResponse` objects, `FakeTransport`, and `FakeConnection`.
+- Skipped live FMP ingest apply mode because the Objective forbids live vendor
+  access and the command requires real `DATABASE_URL`/`FMP_API_KEY`
+  credentials. The local `--check` path remains covered by existing ingest CLI
+  tests.
+- RED: `python -m pytest
+  tests/test_ingest_fmp_prices.py::test_http_failure_keeps_raw_capture_and_marks_run_failed`
+  failed before the fix because the HTTP failure path had `raw:AAPL` followed
+  by rollback and no commit before `run:failed`.
+- GREEN: the same test passed after committing the raw-vaulted HTTP failure
+  before re-raising `FMPHTTPError` into the existing failed-run path.
+- PROVE: temporarily mutating that commit back to rollback made the same test
+  fail again; the mutation was reverted and the test passed.
+- Focused validation: `python -m pytest tests/test_fmp_client.py
+  tests/test_ingest_fmp_prices.py` -> 15 passed in 0.13s.
+- Full validation: `python -m pytest` -> 313 passed in 5.91s.
+- Lint validation: `ruff check .` -> All checks passed.
+- Whitespace validation: `git diff --check` -> passed with no output.
+- Planning validation: `python scripts/planning_steward.py --check` -> OK:
+  planning steward proposal check passed.
+- Offline falsifier input validation: `python
+  scripts/check_falsifier_inputs.py --check` -> OK.
+- Runtime falsifier default: `python scripts/run_falsifier.py --strategy
+  momentum_12_1 --horizon 63 --universe falsifier_seed` did not run to
+  completion because `DATABASE_URL` is not set in this workspace. This was not
+  a live FMP call and no credential was supplied.
+
 Conflict Zones:
 - `src/silver/sources/fmp/client.py`
 - `tests/test_fmp_client.py`

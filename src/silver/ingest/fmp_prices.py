@@ -12,7 +12,7 @@ from silver.analytics import AnalyticsRunRepository
 from silver.prices import DEFAULT_NORMALIZATION_VERSION, DailyPriceRepository
 from silver.prices.daily import DailyPriceRow
 from silver.reference import UniverseMember, UniverseMembershipRepository
-from silver.sources.fmp import FMPClient, parse_historical_daily_prices
+from silver.sources.fmp import FMPClient, FMPHTTPError, parse_historical_daily_prices
 
 
 PRICE_NORMALIZATION_RUN_KIND = "price_normalization"
@@ -136,11 +136,15 @@ def ingest_fmp_prices(
 
         ticker_results: list[TickerIngestResult] = []
         for ticker in tickers:
-            raw_response = client.fetch_historical_daily_prices(
-                ticker,
-                start_date=resolved_start,
-                end_date=resolved_end,
-            )
+            try:
+                raw_response = client.fetch_historical_daily_prices(
+                    ticker,
+                    start_date=resolved_start,
+                    end_date=resolved_end,
+                )
+            except FMPHTTPError:
+                _commit(connection)
+                raise
             _commit(connection)
 
             parsed_rows = parse_historical_daily_prices(
