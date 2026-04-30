@@ -340,6 +340,64 @@ def test_planned_external_source_implementation_can_move_to_merging(
     assert ticket.status == "Merging"
 
 
+def test_planned_validation_ingest_update_can_move_to_merging(
+    tmp_path: Path,
+) -> None:
+    connection = _ledger_connection(tmp_path)
+    _insert_ticket(
+        connection,
+        ticket_id="raw-vault-failed-fmp-responses-003",
+        status="Safety Review",
+        linear_identifier="ARR-64",
+        ticket_role="validation",
+        owns=(
+            "docs/objectives/active/raw-vault-failed-fmp-responses.md",
+            "tests/test_ingest_fmp_prices.py",
+        ),
+        contracts_touched=("fmp-response-audit", "raw-vault-ingest"),
+    )
+
+    actions = vcs_reconciler.reconcile_prs(
+        connection,
+        (
+            _pr(
+                81,
+                title="ARR-64 Validate FMP raw-vault audit trail",
+                body=(
+                    "No live FMP calls were made. Skipped apply mode because "
+                    "DATABASE_URL/FMP_API_KEY credentials are not set."
+                ),
+                changed_files=_changed_files(
+                    "docs/objectives/active/raw-vault-failed-fmp-responses.md",
+                    "src/silver/ingest/fmp_prices.py",
+                    "tests/test_ingest_fmp_prices.py",
+                ),
+                diff=(
+                    "diff --git a/src/silver/ingest/fmp_prices.py b/src/silver/ingest/fmp_prices.py\n"
+                    "+++ b/src/silver/ingest/fmp_prices.py\n"
+                    "+            except FMPHTTPError:\n"
+                    "+                _commit(connection)\n"
+                    "+                raise\n"
+                    "diff --git a/docs/objectives/active/raw-vault-failed-fmp-responses.md b/docs/objectives/active/raw-vault-failed-fmp-responses.md\n"
+                    "+++ b/docs/objectives/active/raw-vault-failed-fmp-responses.md\n"
+                    "+This was not a live FMP call and no credential was supplied.\n"
+                ),
+            ),
+        ),
+        required_checks=("Python 3.10 checks",),
+        apply=True,
+    )
+
+    ticket = work_ledger.select_ticket(
+        connection,
+        "raw-vault-failed-fmp-responses-003",
+    )
+
+    assert [action.action for action in actions] == ["move_merging"]
+    assert "planned external source implementation" in actions[0].reason
+    assert ticket.status == "Merging"
+
+
 def test_pit_doc_change_with_deletions_still_requires_safety_review(
     tmp_path: Path,
 ) -> None:
@@ -511,6 +569,7 @@ def _insert_ticket(
     risk_class: str = "low",
     owns: tuple[str, ...] = ("scripts/vcs_reconciler.py",),
     do_not_touch: tuple[str, ...] = (),
+    contracts_touched: tuple[str, ...] = ("objective-dag",),
 ) -> None:
     now = work_ledger.utc_now()
     objective_id = "portable-orchestration-core"
@@ -558,7 +617,7 @@ def _insert_ticket(
                 "Classify GitHub PRs in Objective context.",
                 ticket_role,
                 "orchestration-core",
-                work_ledger.dumps_json(("objective-dag",)),
+                work_ledger.dumps_json(contracts_touched),
                 status,
                 risk_class,
                 "orchestration",
