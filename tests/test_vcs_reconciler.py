@@ -288,6 +288,58 @@ def test_planned_contract_docs_only_security_hardening_can_move_to_merging(
     assert ticket.status == "Merging"
 
 
+def test_planned_external_source_implementation_can_move_to_merging(
+    tmp_path: Path,
+) -> None:
+    connection = _ledger_connection(tmp_path)
+    _insert_ticket(
+        connection,
+        ticket_id="raw-vault-failed-fmp-responses-002",
+        status="Safety Review",
+        linear_identifier="ARR-63",
+        ticket_role="implementation",
+        owns=("src/silver/sources/fmp/client.py", "tests/test_fmp_client.py"),
+        do_not_touch=(".env",),
+    )
+
+    actions = vcs_reconciler.reconcile_prs(
+        connection,
+        (
+            _pr(
+                79,
+                title="ARR-63 Persist failed FMP HTTP attempts",
+                body=(
+                    "No live FMP calls were made; tests use mocked transport "
+                    "responses."
+                ),
+                changed_files=_changed_files(
+                    "src/silver/sources/fmp/client.py",
+                    "tests/test_fmp_client.py",
+                ),
+                diff=(
+                    "diff --git a/src/silver/sources/fmp/client.py b/src/silver/sources/fmp/client.py\n"
+                    "+++ b/src/silver/sources/fmp/client.py\n"
+                    "+raw_response = self._write_raw_response(response=response)\n"
+                    "diff --git a/tests/test_fmp_client.py b/tests/test_fmp_client.py\n"
+                    "+++ b/tests/test_fmp_client.py\n"
+                    "+assert connection.rows[0][\"http_status\"] == 503\n"
+                ),
+            ),
+        ),
+        required_checks=("Python 3.10 checks",),
+        apply=True,
+    )
+
+    ticket = work_ledger.select_ticket(
+        connection,
+        "raw-vault-failed-fmp-responses-002",
+    )
+
+    assert [action.action for action in actions] == ["move_merging"]
+    assert "planned external source implementation" in actions[0].reason
+    assert ticket.status == "Merging"
+
+
 def test_pit_doc_change_with_deletions_still_requires_safety_review(
     tmp_path: Path,
 ) -> None:
