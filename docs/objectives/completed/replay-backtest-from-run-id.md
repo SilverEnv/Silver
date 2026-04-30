@@ -1,7 +1,7 @@
 # Replay Backtest From Run ID
 
 Status:
-Active
+Completed
 
 Objective:
 Make a persisted Silver backtest reproducible from its durable run identity
@@ -67,7 +67,15 @@ Use the Silver Phase 2 reproducibility contract:
 - `db/migrations/005_backtest_metadata_replay_constraints.sql`
 
 Runner Adapter:
-Linear/Symphony
+Direct Codex build after initial Linear/Symphony slices
+
+Completion:
+- ARR-65 / PR #88 defined the replay contract.
+- ARR-66 / PR #89 implemented replay loading and identity checks.
+- ARR-67 / PR #90 added the falsifier replay CLI path.
+- Direct local commit `ca67125` validated replay determinism and removed
+  database surrogate IDs from replay-critical comparison semantics.
+- Final validation passed: `python -m pytest` reported 361 passing tests.
 
 Expected Tickets:
 
