@@ -565,7 +565,29 @@ def row_to_mirror_ticket(row: sqlite3.Row) -> LedgerMirrorTicket:
 
 
 def descriptions_match(current: str, expected: str) -> bool:
-    return current.strip() == expected.strip()
+    return normalize_linear_description(current) == normalize_linear_description(expected)
+
+
+def normalize_linear_description(description: str) -> str:
+    """Normalize Linear's Markdown readback quirks before comparing text."""
+    normalized_lines: list[str] = []
+    lines = [line.rstrip() for line in description.strip().splitlines()]
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        previous = normalized_lines[-1].strip() if normalized_lines else ""
+        next_line = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if (
+            not stripped
+            and previous.endswith(":")
+            and next_line.startswith(("* ", "- "))
+        ):
+            continue
+        line = line.replace(r"\`", "`")
+        line = re.sub(r"`{3,}", "``", line)
+        if stripped.startswith("* "):
+            line = line.replace("* ", "- ", 1)
+        normalized_lines.append(line)
+    return "\n".join(normalized_lines).strip()
 
 
 def matching_issue(

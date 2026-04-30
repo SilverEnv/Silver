@@ -198,6 +198,40 @@ def test_existing_issue_description_updates_when_metadata_is_missing(
     assert "Contracts Touched:" in description
 
 
+def test_description_compare_accepts_linear_markdown_readback() -> None:
+    expected = "\n".join(
+        [
+            "Owns:",
+            "- `tests/`",
+            "- `scripts/`",
+            "",
+            "Validation:",
+            "- `python -m pytest`",
+            "",
+            "Dependencies:",
+            "- `Wire runners to create `model_runs``",
+        ]
+    )
+    linear_readback = "\n".join(
+        [
+            "Owns:",
+            "",
+            "* `tests/`",
+            "* `scripts/`",
+            "",
+            "Validation:",
+            "",
+            "* `python -m pytest`",
+            "",
+            "Dependencies:",
+            "",
+            "* `Wire runners to create `model_runs\\`\\``",
+        ]
+    )
+
+    assert linear_mirror.descriptions_match(linear_readback, expected)
+
+
 def test_check_mode_avoids_network_and_ledger_reads(tmp_path: Path, capsys) -> None:
     ledger_path = tmp_path / "missing.db"
 
