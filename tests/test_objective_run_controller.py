@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib.util
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -34,6 +36,7 @@ def test_command_plan_keeps_symphony_as_runner_bridge(tmp_path: Path) -> None:
     assert [command.kind for command in commands] == [
         "import",
         "admit",
+        "safety",
         "mirror",
         "vcs",
         "repair",
@@ -43,7 +46,7 @@ def test_command_plan_keeps_symphony_as_runner_bridge(tmp_path: Path) -> None:
         "mirror",
         "status",
     ]
-    assert commands[2].argv[1:] == (
+    assert commands[3].argv[1:] == (
         str(ROOT / "scripts" / "linear_mirror.py"),
         "--ledger",
         str(config.ledger),
@@ -54,8 +57,8 @@ def test_command_plan_keeps_symphony_as_runner_bridge(tmp_path: Path) -> None:
     )
     assert "--dry-run" in commands[0].argv
     assert "--dry-run" in commands[1].argv
-    assert "--dry-run" in commands[6].argv
-    assert "--apply" not in commands[2].argv
+    assert "--dry-run" in commands[7].argv
+    assert "--apply" not in commands[3].argv
 
 
 def test_apply_command_plan_writes_through_existing_stewards(
@@ -70,10 +73,10 @@ def test_apply_command_plan_writes_through_existing_stewards(
     )
 
     commands = objective_run.command_plan(config)
-    repair_runner = commands[5]
+    repair_runner = commands[6]
 
-    assert "--apply" in commands[2].argv
-    assert "--dry-run" not in commands[6].argv
+    assert "--apply" in commands[3].argv
+    assert "--dry-run" not in commands[7].argv
     assert "--apply" in repair_runner.argv
     assert "--push" in repair_runner.argv
     assert "--run-validation" in repair_runner.argv
@@ -185,6 +188,7 @@ def test_run_cycle_stops_when_a_command_fails(tmp_path: Path) -> None:
     assert [item.kind for item in result.command_results] == [
         "import",
         "admit",
+        "safety",
         "mirror",
         "vcs",
     ]
@@ -211,11 +215,12 @@ def test_run_cycle_reconciles_safety_blocker_before_dispatch(
 
     assert result.stopped is False
     assert ticket.status == "Merging"
-    assert [item.kind for item in result.command_results[:4]] == [
+    assert [item.kind for item in result.command_results[:5]] == [
         "vcs",
         "mirror",
         "import",
         "admit",
+        "safety",
     ]
 
 
@@ -238,6 +243,82 @@ def test_run_cycle_stops_after_reconciliation_when_safety_remains(
     assert result.stopped is True
     assert result.stop_reason == "safety blockers present after VCS reconciliation"
     assert [item.kind for item in result.command_results] == ["vcs", "mirror"]
+
+
+def test_preflight_reports_missing_required_environment(tmp_path: Path) -> None:
+    config = replace(
+        _config(tmp_path, apply=True),
+        preflight_required_env=("DATABASE_URL", "FMP_API_KEY", "LINEAR_API_KEY"),
+        preflight_required_commands=("definitely-not-a-silver-command",),
+    )
+
+    result = objective_run.run_preflight(
+        config,
+        env={"PATH": os.environ.get("PATH", ""), "DATABASE_URL": "postgres://local"},
+    )
+
+    errors = [check.subject for check in result.checks if check.status == "error"]
+    assert errors == [
+        "environment FMP_API_KEY",
+        "environment LINEAR_API_KEY",
+        "command definitely-not-a-silver-command",
+    ]
+    assert objective_run.preflight_passed(result) is False
+
+
+def test_safety_dry_run_stops_before_dispatch(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.db"
+    _write_minimal_ledger(ledger, status="Ready")
+    config = _config(tmp_path, ledger=ledger, apply=True)
+    runner = _SafetyFindingRunner()
+    observer = _FakeObserver(())
+
+    result = objective_run.run_cycle(
+        config,
+        cycle=1,
+        runner=runner,
+        observer=observer,
+    )
+
+    assert result.stopped is True
+    assert result.stop_reason == "safety dry-run found pre-dispatch blocker"
+    assert [item.kind for item in result.command_results] == [
+        "import",
+        "admit",
+        "safety",
+    ]
+    assert result.blockers == (
+        "- obj-001 | move_safety_review | Ready -> Safety Review | planned stop",
+    )
+
+
+def test_final_proof_packet_is_written_for_apply_runs(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.db"
+    _write_minimal_ledger(ledger, status="Done")
+    config = _config(tmp_path, ledger=ledger, apply=True)
+    preflight = objective_run.PreflightResult(
+        (objective_run.PreflightCheck("ok", "environment DATABASE_URL", "set"),)
+    )
+    result = objective_run.CycleResult(
+        cycle=1,
+        command_results=(),
+        runner_actions=(),
+        blockers=(),
+        stopped=False,
+        stop_reason=None,
+    )
+
+    path = objective_run.write_final_proof_packet(
+        config=config,
+        preflight=preflight,
+        results=(result,),
+    )
+
+    assert path is not None
+    body = path.read_text(encoding="utf-8")
+    assert "# Objective Run Proof Packet" in body
+    assert "obj: active | Test objective | Done=1" in body
+    assert "`python -m pytest`" in body
 
 
 def _config(
@@ -266,8 +347,15 @@ def _config(
         repair_agent_command=None,
         poll_interval=60,
         max_cycles=1,
+        watch=False,
         stop_on_safety=True,
         observe_runner=True,
+        quiet=True,
+        preflight_required_env=(),
+        preflight_required_commands=(),
+        preflight_required_auth=(),
+        proof_packet_dir=tmp_path / "proof_packets",
+        validation_commands=("python -m pytest",),
         output_format="text",
     )
 
@@ -348,6 +436,24 @@ class _FakeRunner:
             returncode=1 if command.kind == self.fail_kind else 0,
             stdout="",
             stderr="failed" if command.kind == self.fail_kind else "",
+        )
+
+
+class _SafetyFindingRunner:
+    def run(self, command, *, cwd: Path):
+        stdout = ""
+        if command.kind == "safety":
+            stdout = (
+                "DRY RUN: VCS reconciliation result\n"
+                "- obj-001 | move_safety_review | Ready -> Safety Review | "
+                "planned stop\n"
+            )
+        return objective_run.CommandResult(
+            kind=command.kind,
+            argv=command.argv,
+            returncode=0,
+            stdout=stdout,
+            stderr="",
         )
 
 

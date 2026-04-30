@@ -21,17 +21,29 @@ vcs:
   repo: SilverEnv/Silver
 
 controller:
+  watch: true
+  quiet: true
   max_active: 5
   ready_buffer: 5
   limit: 100
   poll_interval_seconds: 60
-  max_cycles: 1
+  max_cycles: 20
   repair_mode: plan
   push_repairs: false
   run_repair_validation: false
   stop_on_safety: true
+  proof_packet_dir: .silver/proof_packets/objectives
 
 project_adapter:
+  preflight:
+    required_env:
+      - DATABASE_URL
+      - FMP_API_KEY
+      - LINEAR_API_KEY
+    required_commands:
+      - gh
+    required_auth:
+      - github_cli
   validation:
     required:
       - git diff --check
