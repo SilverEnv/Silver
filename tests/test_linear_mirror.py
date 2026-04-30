@@ -228,6 +228,21 @@ def test_description_compare_accepts_linear_markdown_readback() -> None:
             "Dependencies:",
             "",
             "* `Wire runners to create `model_runs\\`\\``",
+            "",
+            "PR URL: [https://github.com/SilverEnv/Silver/pull/71](<https://github.com/SilverEnv/Silver/pull/71>)",
+            "",
+            "Latest Steward Event:",
+            "PR #71 [https://github.com/SilverEnv/Silver/pull/71:](<https://github.com/SilverEnv/Silver/pull/71:>) PR is merged",
+        ]
+    )
+    expected = "\n".join(
+        [
+            expected,
+            "",
+            "PR URL: https://github.com/SilverEnv/Silver/pull/71",
+            "",
+            "Latest Steward Event:",
+            "PR #71 https://github.com/SilverEnv/Silver/pull/71: PR is merged",
         ]
     )
 
