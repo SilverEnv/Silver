@@ -6,7 +6,10 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import date, datetime, timezone
-from typing import Literal, Protocol
+from pathlib import Path
+from typing import Literal, Protocol, cast
+
+import yaml
 
 from silver.features.dollar_volume import (
     AVG_DOLLAR_VOLUME_63_DEFINITION,
@@ -24,6 +27,17 @@ from silver.features.momentum_12_1 import (
     compute_momentum_12_1,
     daily_price_available_at,
 )
+from silver.features.price_return import (
+    MOMENTUM_6_1_DEFINITION,
+    MOMENTUM_6_1_LOOKBACK_SESSIONS,
+    RETURN_21_0_DEFINITION,
+    RETURN_21_0_LOOKBACK_SESSIONS,
+    RETURN_63_0_DEFINITION,
+    RETURN_63_0_LOOKBACK_SESSIONS,
+    compute_momentum_6_1,
+    compute_return_21_0,
+    compute_return_63_0,
+)
 from silver.features.realized_volatility import (
     REALIZED_VOLATILITY_63_DEFINITION,
     RETURN_WINDOW_SESSIONS,
@@ -39,9 +53,15 @@ from silver.features.repository import (
 from silver.time.trading_calendar import TradingCalendar, TradingCalendarRow
 
 
+ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_CANDIDATE_CONFIG_PATH = ROOT / "config" / "feature_candidates.yaml"
+
 SelectionDirection = Literal["high", "low"]
 CandidateMaterializer = Literal[
     "momentum_12_1",
+    "momentum_6_1",
+    "return_63_0",
+    "return_21_0",
     "avg_dollar_volume_63",
     "realized_volatility_63",
 ]
@@ -107,6 +127,7 @@ class CandidateFeatureRepository(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class FeatureCandidate:
+    candidate_pack_key: str
     hypothesis_key: str
     name: str
     thesis: str
@@ -116,6 +137,19 @@ class FeatureCandidate:
     materializer: CandidateMaterializer
     selection_direction: SelectionDirection
     notes: str
+
+
+_MATERIALIZER_FEATURE_DEFINITIONS: dict[
+    CandidateMaterializer,
+    NumericFeatureDefinition,
+] = {
+    "momentum_12_1": MOMENTUM_12_1_DEFINITION,
+    "momentum_6_1": MOMENTUM_6_1_DEFINITION,
+    "return_63_0": RETURN_63_0_DEFINITION,
+    "return_21_0": RETURN_21_0_DEFINITION,
+    "avg_dollar_volume_63": AVG_DOLLAR_VOLUME_63_DEFINITION,
+    "realized_volatility_63": REALIZED_VOLATILITY_63_DEFINITION,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,79 +171,83 @@ class CandidateMaterializationSummary:
         return sum(self.skipped_by_reason.values())
 
 
-FEATURE_CANDIDATES: tuple[FeatureCandidate, ...] = (
-    FeatureCandidate(
-        hypothesis_key="momentum_12_1",
-        name="Momentum 12-1",
-        thesis=(
-            "Securities with stronger prior 12-month returns, skipping the most "
-            "recent month, may continue to outperform over the next quarter."
-        ),
-        signal_name=MOMENTUM_12_1_DEFINITION.name,
-        mechanism=(
-            "Trend persistence and delayed investor reaction can make medium-term "
-            "relative strength informative after costs."
-        ),
-        definition=MOMENTUM_12_1_DEFINITION,
-        materializer="momentum_12_1",
-        selection_direction="high",
-        notes="Deterministic 12-1 simple-return momentum from adjusted closes.",
-    ),
-    FeatureCandidate(
-        hypothesis_key="avg_dollar_volume_63",
-        name="Average Dollar Volume 63",
-        thesis=(
-            "Securities with higher recent dollar volume may have stronger "
-            "institutional sponsorship and cleaner tradability over the next "
-            "quarter."
-        ),
-        signal_name=AVG_DOLLAR_VOLUME_63_DEFINITION.name,
-        mechanism=(
-            "Liquidity can proxy for investor attention, lower trading friction, "
-            "and broader participation."
-        ),
-        definition=AVG_DOLLAR_VOLUME_63_DEFINITION,
-        materializer="avg_dollar_volume_63",
-        selection_direction="high",
-        notes="Trailing 63-session average of adjusted close times volume.",
-    ),
-    FeatureCandidate(
-        hypothesis_key="low_realized_volatility_63",
-        name="Low Realized Volatility 63",
-        thesis=(
-            "Securities with lower recent realized volatility may deliver better "
-            "risk-adjusted forward returns than high-volatility peers."
-        ),
-        signal_name=REALIZED_VOLATILITY_63_DEFINITION.name,
-        mechanism=(
-            "The low-volatility effect can appear when investors overpay for "
-            "high-beta or lottery-like stocks."
-        ),
-        definition=REALIZED_VOLATILITY_63_DEFINITION,
-        materializer="realized_volatility_63",
-        selection_direction="low",
-        notes="Trailing 63-session annualized sample standard deviation of returns.",
-    ),
-)
+def load_feature_candidates(
+    config_path: Path | str = DEFAULT_CANDIDATE_CONFIG_PATH,
+) -> tuple[FeatureCandidate, ...]:
+    path = Path(config_path)
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FeatureStoreError(f"feature candidate config not found: {path}") from exc
+    except yaml.YAMLError as exc:
+        raise FeatureStoreError(f"invalid feature candidate YAML in {path}: {exc}") from exc
+
+    if not isinstance(raw, Mapping):
+        raise FeatureStoreError("feature candidate config must be a mapping")
+    version = raw.get("version")
+    if version != 1:
+        raise FeatureStoreError("feature candidate config version must be 1")
+    candidate_pack_key = _required_text(raw, "candidate_pack")
+    raw_candidates = raw.get("candidates")
+    if not isinstance(raw_candidates, list) or not raw_candidates:
+        raise FeatureStoreError("feature candidate config must include candidates")
+
+    candidates: list[FeatureCandidate] = []
+    seen_keys: set[str] = set()
+    for index, raw_candidate in enumerate(raw_candidates, start=1):
+        if not isinstance(raw_candidate, Mapping):
+            raise FeatureStoreError(f"candidate #{index} must be a mapping")
+        candidate = _candidate_from_config(
+            raw_candidate,
+            candidate_pack_key=candidate_pack_key,
+            index=index,
+        )
+        if candidate.hypothesis_key in seen_keys:
+            raise FeatureStoreError(
+                f"duplicate feature candidate key {candidate.hypothesis_key}"
+            )
+        seen_keys.add(candidate.hypothesis_key)
+        candidates.append(candidate)
+    return tuple(candidates)
 
 
-def feature_candidate_keys() -> tuple[str, ...]:
-    return tuple(candidate.hypothesis_key for candidate in FEATURE_CANDIDATES)
+def feature_candidate_keys(
+    candidates: Sequence[FeatureCandidate] | None = None,
+) -> tuple[str, ...]:
+    source = FEATURE_CANDIDATES if candidates is None else candidates
+    return tuple(candidate.hypothesis_key for candidate in source)
 
 
-def feature_candidate_by_key(key: str) -> FeatureCandidate:
+def feature_candidate_by_key(
+    key: str,
+    *,
+    candidates: Sequence[FeatureCandidate] | None = None,
+) -> FeatureCandidate:
     normalized = _candidate_key(key)
-    for candidate in FEATURE_CANDIDATES:
+    source = FEATURE_CANDIDATES if candidates is None else candidates
+    for candidate in source:
         if candidate.hypothesis_key == normalized:
             return candidate
-    allowed = ", ".join(feature_candidate_keys())
+    allowed = ", ".join(feature_candidate_keys(source))
     raise FeatureStoreError(f"unknown feature candidate {normalized}; choose {allowed}")
 
 
-def feature_candidates_for_keys(keys: Sequence[str] | None) -> tuple[FeatureCandidate, ...]:
+def feature_candidates_for_keys(
+    keys: Sequence[str] | None,
+    *,
+    config_path: Path | str | None = None,
+) -> tuple[FeatureCandidate, ...]:
+    candidates = (
+        FEATURE_CANDIDATES
+        if config_path is None
+        else load_feature_candidates(config_path)
+    )
     if not keys:
-        return FEATURE_CANDIDATES
-    return tuple(feature_candidate_by_key(key) for key in keys)
+        return candidates
+    return tuple(
+        feature_candidate_by_key(key, candidates=candidates)
+        for key in keys
+    )
 
 
 def materialize_feature_candidate(
@@ -368,6 +406,46 @@ def _materialize_price_only_candidate(
                     prices=observations,
                     calendar=calendar,
                 )
+            elif candidate.materializer in (
+                "momentum_6_1",
+                "return_63_0",
+                "return_21_0",
+            ):
+                start_offset, end_offset = _price_return_offsets(
+                    candidate.materializer
+                )
+                observations = _price_return_boundary_prices(
+                    security_prices=security_prices,
+                    session_dates=session_dates,
+                    session_index=session_index,
+                    asof_date=asof_date,
+                    start_offset=start_offset,
+                    end_offset=end_offset,
+                )
+                if observations is None:
+                    skipped["insufficient_history"] += 1
+                    continue
+                if candidate.materializer == "momentum_6_1":
+                    result = compute_momentum_6_1(
+                        security_id=membership.security_id,
+                        asof=asof,
+                        prices=observations,
+                        calendar=calendar,
+                    )
+                elif candidate.materializer == "return_63_0":
+                    result = compute_return_63_0(
+                        security_id=membership.security_id,
+                        asof=asof,
+                        prices=observations,
+                        calendar=calendar,
+                    )
+                else:
+                    result = compute_return_21_0(
+                        security_id=membership.security_id,
+                        asof=asof,
+                        prices=observations,
+                        calendar=calendar,
+                    )
             else:  # pragma: no cover - guarded by caller branch.
                 raise FeatureStoreError(f"unsupported candidate {candidate.materializer}")
 
@@ -540,6 +618,42 @@ def _rolling_price_window(
     )
 
 
+def _price_return_offsets(
+    materializer: CandidateMaterializer,
+) -> tuple[int, int]:
+    if materializer == "momentum_6_1":
+        return MOMENTUM_6_1_LOOKBACK_SESSIONS, SKIP_RECENT_SESSIONS
+    if materializer == "return_63_0":
+        return RETURN_63_0_LOOKBACK_SESSIONS, 0
+    if materializer == "return_21_0":
+        return RETURN_21_0_LOOKBACK_SESSIONS, 0
+    raise FeatureStoreError(f"unsupported price-return materializer {materializer}")
+
+
+def _price_return_boundary_prices(
+    *,
+    security_prices: Mapping[date, AdjustedDailyPriceObservation],
+    session_dates: Sequence[date],
+    session_index: Mapping[date, int],
+    asof_date: date,
+    start_offset: int,
+    end_offset: int,
+) -> tuple[AdjustedDailyPriceObservation, ...] | None:
+    index = session_index[asof_date]
+    if index < start_offset or index < end_offset:
+        return None
+    boundary_dates = (
+        session_dates[index - start_offset],
+        session_dates[index - end_offset],
+    )
+    return tuple(
+        price
+        for boundary_date in boundary_dates
+        for price in [security_prices.get(boundary_date)]
+        if price is not None
+    )
+
+
 def _rolling_price_volume_window(
     *,
     security_rows: Mapping[date, AdjustedPriceVolumeObservation],
@@ -602,6 +716,56 @@ def _metadata_value(value: object) -> object:
     return value
 
 
+def _candidate_from_config(
+    raw: Mapping[object, object],
+    *,
+    candidate_pack_key: str,
+    index: int,
+) -> FeatureCandidate:
+    materializer_text = _required_text(raw, "materializer")
+    if materializer_text not in _MATERIALIZER_FEATURE_DEFINITIONS:
+        allowed = ", ".join(sorted(_MATERIALIZER_FEATURE_DEFINITIONS))
+        raise FeatureStoreError(
+            f"candidate #{index} uses unsupported materializer "
+            f"{materializer_text}; choose {allowed}"
+        )
+    materializer = cast(CandidateMaterializer, materializer_text)
+    definition = _MATERIALIZER_FEATURE_DEFINITIONS[materializer]
+
+    source_feature = _required_text(raw, "source_feature")
+    if source_feature != definition.name:
+        raise FeatureStoreError(
+            f"candidate #{index} source_feature {source_feature} does not match "
+            f"materializer {materializer} feature {definition.name}"
+        )
+
+    direction_text = _required_text(raw, "selection_direction")
+    if direction_text not in ("high", "low"):
+        raise FeatureStoreError(
+            f"candidate #{index} selection_direction must be high or low"
+        )
+
+    return FeatureCandidate(
+        candidate_pack_key=candidate_pack_key,
+        hypothesis_key=_candidate_key(_required_text(raw, "hypothesis_key")),
+        name=_required_text(raw, "name"),
+        thesis=_required_text(raw, "thesis"),
+        signal_name=source_feature,
+        mechanism=_required_text(raw, "mechanism"),
+        definition=definition,
+        materializer=materializer,
+        selection_direction=cast(SelectionDirection, direction_text),
+        notes=_required_text(raw, "notes"),
+    )
+
+
+def _required_text(raw: Mapping[object, object], field_name: str) -> str:
+    value = raw.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise FeatureStoreError(f"{field_name} must be a non-empty string")
+    return value.strip()
+
+
 def _candidate_key(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise FeatureStoreError("candidate key must be a non-empty string")
@@ -620,3 +784,6 @@ def _validate_date_bounds(*, start_date: date | None, end_date: date | None) -> 
 def _require_aware(value: datetime, field_name: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise FeatureStoreError(f"{field_name} must be timezone-aware")
+
+
+FEATURE_CANDIDATES: tuple[FeatureCandidate, ...] = load_feature_candidates()

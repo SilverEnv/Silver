@@ -1077,11 +1077,13 @@ Quality gate between tiers: structured output validates against schema, confiden
 - Capacity > $1M
 - Decay curve doesn't crash to zero in <30 days
 
-Feature Candidate Pack v0 is an early manual candidate stage, not a validation
-claim. It runs a small fixed family of numeric hypotheses through the same
-falsifier and registry path so failed ideas are visible instead of forgotten.
-Family-level multiple-comparisons correction remains a required promotion gate
-before any candidate moves beyond exploratory evidence.
+Feature Candidate Pack v1 is an early manual candidate stage, not a validation
+claim. It runs a configured family of numeric hypotheses from
+`config/feature_candidates.yaml` through the same falsifier and registry path
+so failed ideas are visible instead of forgotten. The first configured family
+includes adjusted-close return windows, liquidity, and realized-volatility
+candidates. Family-level multiple-comparisons correction remains a required
+promotion gate before any candidate moves beyond exploratory evidence.
 
 **validated → live:** at least 3 months of paper-trading performance consistent with backtest expectation (within 30% of expected Sharpe).
 

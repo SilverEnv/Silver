@@ -1,12 +1,14 @@
 """Point-in-time feature calculations and feature-store helpers."""
 
 from silver.features.candidate_pack import (
+    DEFAULT_CANDIDATE_CONFIG_PATH,
     FEATURE_CANDIDATES,
     CandidateMaterializationSummary,
     FeatureCandidate,
     feature_candidate_by_key,
     feature_candidate_keys,
     feature_candidates_for_keys,
+    load_feature_candidates,
     materialize_feature_candidate,
 )
 from silver.features.dollar_volume import (
@@ -34,6 +36,17 @@ from silver.features.momentum_12_1_materializer import (
     MomentumMaterializationSummary,
     materialize_momentum_12_1,
 )
+from silver.features.price_return import (
+    MOMENTUM_6_1_DEFINITION,
+    RETURN_21_0_DEFINITION,
+    RETURN_63_0_DEFINITION,
+    PriceReturnFeatureValue,
+    PriceReturnInputError,
+    PriceReturnWindow,
+    compute_momentum_6_1,
+    compute_return_21_0,
+    compute_return_63_0,
+)
 from silver.features.realized_volatility import (
     REALIZED_VOLATILITY_63_DEFINITION,
     RealizedVolatilityFeatureValue,
@@ -56,6 +69,7 @@ from silver.features.repository import (
 __all__ = [
     "AVG_DOLLAR_VOLUME_63_DEFINITION",
     "DAILY_PRICE_POLICY_NAME",
+    "DEFAULT_CANDIDATE_CONFIG_PATH",
     "FEATURE_CANDIDATES",
     "DAILY_PRICE_POLICY_VERSION",
     "MOMENTUM_12_1_DEFINITION",
@@ -77,21 +91,31 @@ __all__ = [
     "MomentumInputError",
     "MomentumMaterializationSummary",
     "MomentumWindow",
+    "MOMENTUM_6_1_DEFINITION",
     "NumericFeatureDefinition",
     "NumericFeatureValue",
+    "PriceReturnFeatureValue",
+    "PriceReturnInputError",
+    "PriceReturnWindow",
+    "RETURN_21_0_DEFINITION",
+    "RETURN_63_0_DEFINITION",
     "RealizedVolatilityFeatureValue",
     "RealizedVolatilityInputError",
     "RealizedVolatilityWindow",
     "UniverseMembershipRecord",
     "compute_avg_dollar_volume_63",
+    "compute_momentum_6_1",
     "compute_momentum_12_1",
     "compute_realized_volatility_63",
+    "compute_return_21_0",
+    "compute_return_63_0",
     "daily_price_available_at",
     "feature_candidate_by_key",
     "feature_candidate_keys",
     "feature_candidates_for_keys",
     "feature_definition_hash",
     "feature_definition_payload",
+    "load_feature_candidates",
     "materialize_feature_candidate",
     "materialize_momentum_12_1",
 ]

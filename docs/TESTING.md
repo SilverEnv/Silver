@@ -120,9 +120,10 @@ truth. In particular:
 ## Feature Candidate Pack
 
 Feature candidate pack tests must prove the pack has stable candidate keys,
-each candidate materializes only point-in-time feature values, candidate
-metadata records the selection direction, and the batch runner links each
-hypothesis to a durable `backtest_run_id`.
+candidate definitions load from YAML with source-feature validation, each
+candidate materializes only point-in-time feature values, candidate metadata
+records the selection direction, and the batch runner links each hypothesis to
+a durable `backtest_run_id`.
 
 The generic falsifier tests must cover both high-is-better and low-is-better
 ranking. Low-direction candidates should keep raw feature values in
@@ -131,6 +132,10 @@ deterministic model and backtest identity must distinguish non-default
 `selection_direction` values while preserving legacy `high` as the implicit
 default, so replaying a low-volatility candidate cannot silently become a
 high-volatility candidate.
+
+Feature-family tests should cover each new allow-listed materializer before it
+is added to `config/feature_candidates.yaml`, including no-lookahead behavior at
+the daily price availability boundary.
 
 ## Reporting
 

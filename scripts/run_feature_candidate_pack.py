@@ -18,9 +18,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from silver.features import (  # noqa: E402
+    DEFAULT_CANDIDATE_CONFIG_PATH,
     FeatureCandidate,
     FeatureStoreError,
-    feature_candidate_keys,
     feature_candidates_for_keys,
 )
 from silver.hypotheses import (  # noqa: E402
@@ -72,8 +72,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--candidate",
         action="append",
-        choices=feature_candidate_keys(),
         help="candidate key to run; repeat to choose several",
+    )
+    parser.add_argument(
+        "--candidate-config",
+        type=Path,
+        default=DEFAULT_CANDIDATE_CONFIG_PATH,
+        help="YAML feature-candidate definition file",
     )
     parser.add_argument(
         "--skip-materialize",
@@ -92,7 +97,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        candidates = feature_candidates_for_keys(args.candidate)
+        candidate_config_path = _resolve_candidate_config_path(args.candidate_config)
+        candidates = feature_candidates_for_keys(
+            args.candidate,
+            config_path=candidate_config_path,
+        )
         if args.check:
             print(
                 "OK: feature candidate pack check passed for "
@@ -117,6 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             horizon=args.horizon,
                             output_dir=args.output_dir,
                             skip_materialize=args.skip_materialize,
+                            candidate_config_path=candidate_config_path,
                         )
                     )
                 except Exception:
@@ -143,10 +153,15 @@ def run_candidate(
     horizon: int,
     output_dir: Path,
     skip_materialize: bool,
+    candidate_config_path: Path,
 ) -> CandidatePackResult:
     if not skip_materialize:
         _run_command(
-            _materialize_command(candidate, universe=universe),
+            _materialize_command(
+                candidate,
+                universe=universe,
+                candidate_config_path=candidate_config_path,
+            ),
             database_url=database_url,
         )
 
@@ -197,7 +212,7 @@ def candidate_hypothesis(
         target_kind="raw_return",
         status="proposed",
         metadata={
-            "candidate_pack": "numeric_feature_pack_v0",
+            "candidate_pack": candidate.candidate_pack_key,
             "feature": candidate.signal_name,
             "selection_direction": candidate.selection_direction,
         },
@@ -241,12 +256,15 @@ def _materialize_command(
     candidate: FeatureCandidate,
     *,
     universe: str,
+    candidate_config_path: Path,
 ) -> list[str]:
     return [
         sys.executable,
         str(ROOT / "scripts" / "materialize_feature_candidates.py"),
         "--universe",
         universe,
+        "--candidate-config",
+        str(candidate_config_path),
         "--candidate",
         candidate.hypothesis_key,
     ]
@@ -303,6 +321,13 @@ def _load_psycopg() -> object:
             "psycopg is required for candidate-pack evaluation; run `uv sync`"
         ) from exc
     return psycopg
+
+
+def _resolve_candidate_config_path(path: Path) -> Path:
+    candidate_path = path.expanduser()
+    if candidate_path.is_absolute():
+        return candidate_path
+    return (Path.cwd() / candidate_path).resolve()
 
 
 def _display_path(path: Path) -> str:

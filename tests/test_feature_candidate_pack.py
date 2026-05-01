@@ -8,11 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from silver.features import (
+    DEFAULT_CANDIDATE_CONFIG_PATH,
     FeatureCandidate,
+    FeatureStoreError,
     FeatureValueWrite,
     feature_candidate_by_key,
     feature_candidate_keys,
     feature_definition_hash,
+    load_feature_candidates,
     materialize_feature_candidate,
 )
 from silver.features.dollar_volume import AdjustedPriceVolumeObservation
@@ -49,12 +52,53 @@ def load_candidate_pack_cli():
 candidate_pack_cli = load_candidate_pack_cli()
 
 
-def test_feature_candidate_pack_v0_keys_are_stable() -> None:
+def test_feature_candidate_pack_v1_keys_are_stable() -> None:
     assert feature_candidate_keys() == (
         "momentum_12_1",
         "avg_dollar_volume_63",
+        "momentum_6_1",
+        "momentum_3_0",
+        "short_reversal_21_0",
         "low_realized_volatility_63",
     )
+
+
+def test_default_feature_candidate_config_loads_pack_metadata() -> None:
+    candidates = load_feature_candidates(DEFAULT_CANDIDATE_CONFIG_PATH)
+
+    assert candidates[0].candidate_pack_key == "numeric_feature_pack_v1"
+    assert candidates[0].hypothesis_key == "momentum_12_1"
+    assert candidates[0].signal_name == "momentum_12_1"
+    assert candidates[0].materializer == "momentum_12_1"
+
+
+def test_load_feature_candidates_rejects_source_feature_mismatch(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "feature_candidates.yaml"
+    config_path.write_text(
+        """
+version: 1
+candidate_pack: test_pack
+candidates:
+  - hypothesis_key: bad_volume
+    name: Bad Volume
+    source_feature: momentum_12_1
+    materializer: avg_dollar_volume_63
+    selection_direction: high
+    thesis: Bad source feature.
+    mechanism: Bad mechanism.
+    notes: Bad notes.
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    try:
+        load_feature_candidates(config_path)
+    except FeatureStoreError as exc:
+        assert "source_feature momentum_12_1 does not match" in str(exc)
+    else:  # pragma: no cover - assertion branch.
+        raise AssertionError("expected source feature mismatch to fail")
 
 
 def test_materialize_avg_dollar_volume_candidate_writes_feature_value() -> None:
@@ -123,6 +167,40 @@ def test_materialize_low_realized_volatility_candidate_writes_feature_value() ->
     assert stored.source_metadata["window"]["return_count"] == 63
 
 
+def test_materialize_short_reversal_candidate_writes_price_return_value() -> None:
+    candidate = feature_candidate_by_key("short_reversal_21_0")
+    calendar_rows, sessions = _calendar_rows(date(2024, 1, 2), session_count=22)
+    repository = FakeCandidateRepository(
+        candidate=candidate,
+        calendar_rows=calendar_rows,
+        prices={
+            SECURITY_ID: [
+                _price(sessions[0], Decimal("100.00")),
+                _price(sessions[-1], Decimal("90.00")),
+            ]
+        },
+    )
+
+    summary = materialize_feature_candidate(
+        repository,
+        candidate,
+        universe_name="falsifier_seed",
+        start_date=None,
+        end_date=None,
+        computed_by_run_id=90,
+    )
+
+    assert summary.values_written == 1
+    assert summary.skipped_by_reason == {"insufficient_history": 21}
+    [stored] = repository.feature_values.values()
+    assert stored.value == -0.1
+    assert stored.asof_date == sessions[-1]
+    assert stored.source_metadata["candidate_key"] == "short_reversal_21_0"
+    assert stored.source_metadata["selection_direction"] == "low"
+    assert stored.source_metadata["window"]["lookback_sessions"] == 21
+    assert stored.source_metadata["window"]["skip_recent_sessions"] == 0
+
+
 def test_candidate_pack_builds_low_direction_falsifier_command() -> None:
     candidate = feature_candidate_by_key("low_realized_volatility_63")
 
@@ -139,6 +217,20 @@ def test_candidate_pack_builds_low_direction_falsifier_command() -> None:
     assert command[-2:] == ["--selection-direction", "low"]
 
 
+def test_candidate_pack_materialize_command_uses_candidate_config() -> None:
+    candidate = feature_candidate_by_key("avg_dollar_volume_63")
+
+    command = candidate_pack_cli._materialize_command(
+        candidate,
+        universe="falsifier_seed",
+        candidate_config_path=Path("/tmp/feature_candidates.yaml"),
+    )
+
+    assert "--candidate-config" in command
+    assert "/tmp/feature_candidates.yaml" in command
+    assert command[-2:] == ["--candidate", "avg_dollar_volume_63"]
+
+
 def test_candidate_hypothesis_carries_feature_and_direction_metadata() -> None:
     candidate = feature_candidate_by_key("low_realized_volatility_63")
 
@@ -151,7 +243,7 @@ def test_candidate_hypothesis_carries_feature_and_direction_metadata() -> None:
     assert hypothesis.hypothesis_key == "low_realized_volatility_63"
     assert hypothesis.signal_name == "realized_volatility_63"
     assert hypothesis.metadata == {
-        "candidate_pack": "numeric_feature_pack_v0",
+        "candidate_pack": "numeric_feature_pack_v1",
         "feature": "realized_volatility_63",
         "selection_direction": "low",
     }
