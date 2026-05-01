@@ -19,10 +19,10 @@ if str(SRC) not in sys.path:
 from silver.features import (  # noqa: E402
     DAILY_PRICE_POLICY_NAME,
     DAILY_PRICE_POLICY_VERSION,
+    DEFAULT_CANDIDATE_CONFIG_PATH,
     FeatureCandidate,
     FeatureStoreError,
     FeatureStoreRepository,
-    feature_candidate_keys,
     feature_candidates_for_keys,
     feature_definition_hash,
     materialize_feature_candidate,
@@ -50,8 +50,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--candidate",
         action="append",
-        choices=feature_candidate_keys(),
         help="candidate key to materialize; repeat to choose several",
+    )
+    parser.add_argument(
+        "--candidate-config",
+        type=Path,
+        default=DEFAULT_CANDIDATE_CONFIG_PATH,
+        help="YAML feature-candidate definition file",
     )
     parser.add_argument(
         "--start-date",
@@ -75,7 +80,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         _validate_date_bounds(start_date=args.start_date, end_date=args.end_date)
-        candidates = feature_candidates_for_keys(args.candidate)
+        candidate_config_path = _resolve_candidate_config_path(args.candidate_config)
+        candidates = feature_candidates_for_keys(
+            args.candidate,
+            config_path=candidate_config_path,
+        )
         if args.check:
             for candidate in candidates:
                 print(_candidate_check_line(candidate))
@@ -214,6 +223,13 @@ def _load_psycopg() -> object:
             "install the project dependencies first"
         ) from exc
     return psycopg
+
+
+def _resolve_candidate_config_path(path: Path) -> Path:
+    candidate_path = path.expanduser()
+    if candidate_path.is_absolute():
+        return candidate_path
+    return (Path.cwd() / candidate_path).resolve()
 
 
 def _code_git_sha() -> str:

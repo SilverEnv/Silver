@@ -1,12 +1,14 @@
 """Point-in-time feature calculations and feature-store helpers."""
 
 from silver.features.candidate_pack import (
+    DEFAULT_CANDIDATE_CONFIG_PATH,
     FEATURE_CANDIDATES,
     CandidateMaterializationSummary,
     FeatureCandidate,
     feature_candidate_by_key,
     feature_candidate_keys,
     feature_candidates_for_keys,
+    load_feature_candidates,
     materialize_feature_candidate,
 )
 from silver.features.dollar_volume import (
@@ -56,6 +58,7 @@ from silver.features.repository import (
 __all__ = [
     "AVG_DOLLAR_VOLUME_63_DEFINITION",
     "DAILY_PRICE_POLICY_NAME",
+    "DEFAULT_CANDIDATE_CONFIG_PATH",
     "FEATURE_CANDIDATES",
     "DAILY_PRICE_POLICY_VERSION",
     "MOMENTUM_12_1_DEFINITION",
@@ -92,6 +95,7 @@ __all__ = [
     "feature_candidates_for_keys",
     "feature_definition_hash",
     "feature_definition_payload",
+    "load_feature_candidates",
     "materialize_feature_candidate",
     "materialize_momentum_12_1",
 ]

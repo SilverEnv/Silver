@@ -1,0 +1,41 @@
+version: 1
+candidate_pack: numeric_feature_pack_v1
+candidates:
+  - hypothesis_key: momentum_12_1
+    name: Momentum 12-1
+    source_feature: momentum_12_1
+    materializer: momentum_12_1
+    selection_direction: high
+    thesis: >-
+      Securities with stronger prior 12-month returns, skipping the most recent
+      month, may continue to outperform over the next quarter.
+    mechanism: >-
+      Trend persistence and delayed investor reaction can make medium-term
+      relative strength informative after costs.
+    notes: Deterministic 12-1 simple-return momentum from adjusted closes.
+
+  - hypothesis_key: avg_dollar_volume_63
+    name: Average Dollar Volume 63
+    source_feature: avg_dollar_volume_63
+    materializer: avg_dollar_volume_63
+    selection_direction: high
+    thesis: >-
+      Securities with higher recent dollar volume may have stronger
+      institutional sponsorship and cleaner tradability over the next quarter.
+    mechanism: >-
+      Liquidity can proxy for investor attention, lower trading friction, and
+      broader participation.
+    notes: Trailing 63-session average of adjusted close times volume.
+
+  - hypothesis_key: low_realized_volatility_63
+    name: Low Realized Volatility 63
+    source_feature: realized_volatility_63
+    materializer: realized_volatility_63
+    selection_direction: low
+    thesis: >-
+      Securities with lower recent realized volatility may deliver better
+      risk-adjusted forward returns than high-volatility peers.
+    mechanism: >-
+      The low-volatility effect can appear when investors overpay for high-beta
+      or lottery-like stocks.
+    notes: Trailing 63-session annualized sample standard deviation of returns.

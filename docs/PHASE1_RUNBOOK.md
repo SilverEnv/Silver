@@ -126,8 +126,9 @@ python scripts/materialize_momentum_12_1.py --dry-run --universe falsifier_seed
 python scripts/materialize_momentum_12_1.py --universe falsifier_seed
 ```
 
-Feature Candidate Pack v0 materializes the first small set of deterministic
-numeric candidates for multi-hypothesis evaluation:
+Feature Candidate Pack v1 materializes the configured set of deterministic
+numeric candidates in `config/feature_candidates.yaml` for multi-hypothesis
+evaluation:
 
 - `momentum_12_1`, where high values are selected
 - `avg_dollar_volume_63`, where high values are selected
@@ -139,6 +140,11 @@ python scripts/materialize_feature_candidates.py --check
 python scripts/materialize_feature_candidates.py --dry-run --universe falsifier_seed
 python scripts/materialize_feature_candidates.py --universe falsifier_seed
 ```
+
+Use `--candidate-config <path>` to review or run a different YAML candidate
+pack without changing Python runner code. The YAML owns candidate identity,
+thesis text, source feature, ranking direction, and materializer name; Python
+still owns the allowed materializers and point-in-time calculations.
 
 ## 5. Run The Falsifier
 
@@ -237,7 +243,7 @@ Inspect the current registry:
 python scripts/manage_hypotheses.py list
 ```
 
-To run Feature Candidate Pack v0 as one multi-hypothesis evaluation, use:
+To run Feature Candidate Pack v1 as one multi-hypothesis evaluation, use:
 
 ```bash
 python scripts/run_feature_candidate_pack.py --check
@@ -255,6 +261,9 @@ reports/falsifier/candidate_pack/
 
 Use `--skip-materialize` only when you intentionally want to evaluate the
 feature values already in the database.
+
+Use `--candidate <hypothesis_key>` to run one configured candidate, repeat it
+to run several, or omit it to run the full configured pack.
 
 This registry is navigation memory. The authoritative evidence remains the
 linked `backtest_runs` and `model_runs` metadata plus replay proof.

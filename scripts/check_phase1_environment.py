@@ -44,6 +44,7 @@ REQUIRED_IMPORTS: tuple[str, ...] = (
 EXPECTED_REPO_PATHS: tuple[ExpectedPath, ...] = (
     ExpectedPath("pyproject.toml", "file"),
     ExpectedPath("config/available_at_policies.yaml", "file"),
+    ExpectedPath("config/feature_candidates.yaml", "file"),
     ExpectedPath("config/seed_reference_data.yaml", "file"),
     ExpectedPath("config/trading_calendar.yaml", "file"),
     ExpectedPath("db/migrations", "dir"),
