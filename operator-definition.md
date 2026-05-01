@@ -395,6 +395,7 @@ Examples:
 ```text
 price_normalization
 sec_companyfacts_ingest
+fmp_fundamentals_normalization
 label_generation
 feature_generation
 falsifier_report_invocation
@@ -429,6 +430,51 @@ store the exact bytes before we try to normalize any fundamentals.
 This job does not yet create fundamental features. It records the
 `xbrl_companyfacts` available-at policy version so later normalization knows
 which point-in-time rule applies to facts derived from filings.
+
+### fmp_fundamentals_normalization
+
+`fmp_fundamentals_normalization` is the job that turns selected FMP normalized
+financial statement rows into Silver's narrow fundamental metric table.
+
+It reads:
+
+```text
+FMP income statement responses
+FMP cash flow statement responses
+silver.universe_membership
+silver.trading_calendar
+silver.available_at_policies
+```
+
+and writes:
+
+```text
+silver.raw_objects
+silver.fundamental_values
+```
+
+Plain English:
+
+```text
+Fetch annual and quarterly normalized FMP statements, store the raw responses,
+then publish only the selected v0 metrics with filing-based available_at.
+```
+
+The first selected metrics are:
+
+```text
+revenue
+gross_profit
+operating_income
+net_income
+operating_cash_flow
+capital_expenditure
+free_cash_flow
+diluted_weighted_average_shares
+```
+
+Diluted weighted average shares are required. The job does not silently use
+basic shares when diluted shares are missing.
 
 ### price_normalization
 

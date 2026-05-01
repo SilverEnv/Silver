@@ -128,6 +128,38 @@ class FMPClient:
         request = self._historical_daily_price_request(symbol, start_date, end_date)
         return self._get_with_retries(request)
 
+    def fetch_income_statement(
+        self,
+        symbol: str,
+        *,
+        period: str,
+        limit: int,
+    ) -> FMPRawResponse:
+        """Fetch FMP normalized income statements and persist exact bytes."""
+        request = self._financial_statement_request(
+            "/stable/income-statement",
+            symbol=symbol,
+            period=period,
+            limit=limit,
+        )
+        return self._get_with_retries(request)
+
+    def fetch_cash_flow_statement(
+        self,
+        symbol: str,
+        *,
+        period: str,
+        limit: int,
+    ) -> FMPRawResponse:
+        """Fetch FMP normalized cash-flow statements and persist exact bytes."""
+        request = self._financial_statement_request(
+            "/stable/cash-flow-statement",
+            symbol=symbol,
+            period=period,
+            limit=limit,
+        )
+        return self._get_with_retries(request)
+
     def _write_raw_response(
         self,
         *,
@@ -192,6 +224,39 @@ class FMPClient:
         request_url = _url(self._base_url, endpoint, query_params)
         return _FMPRequest(
             endpoint=endpoint,
+            request_url=request_url,
+            safe_request_url=_redacted_url(request_url),
+            vault_params=vault_params,
+            safe_vault_params=_redacted_params(vault_params),
+        )
+
+    def _financial_statement_request(
+        self,
+        endpoint: str,
+        *,
+        symbol: str,
+        period: str,
+        limit: int,
+    ) -> _FMPRequest:
+        normalized_endpoint = _endpoint(endpoint)
+        normalized_symbol = _symbol(symbol)
+        normalized_period = _statement_period(period)
+        normalized_limit = _positive_int(limit, "limit")
+        query_params = {
+            "apikey": self._api_key,
+            "limit": str(normalized_limit),
+            "period": normalized_period,
+            "symbol": normalized_symbol,
+        }
+        vault_params = {
+            "apikey": self._api_key,
+            "limit": str(normalized_limit),
+            "period": normalized_period,
+            "symbol": normalized_symbol,
+        }
+        request_url = _url(self._base_url, normalized_endpoint, query_params)
+        return _FMPRequest(
+            endpoint=normalized_endpoint,
             request_url=request_url,
             safe_request_url=_redacted_url(request_url),
             vault_params=vault_params,
@@ -332,10 +397,31 @@ def _max_retries(value: int) -> int:
     return value
 
 
+def _positive_int(value: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise FMPConfigurationError(f"{name} must be a positive integer")
+    return value
+
+
 def _symbol(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise FMPConfigurationError("symbol must be a non-empty string")
     return value.strip().upper()
+
+
+def _endpoint(value: str) -> str:
+    if not isinstance(value, str) or not value.startswith("/stable/"):
+        raise FMPConfigurationError("endpoint must be a stable FMP path")
+    return value
+
+
+def _statement_period(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise FMPConfigurationError("period must be annual or quarter")
+    normalized = value.strip().lower()
+    if normalized not in {"annual", "quarter"}:
+        raise FMPConfigurationError("period must be annual or quarter")
+    return normalized
 
 
 def _request_date(value: date | str, name: str) -> date:

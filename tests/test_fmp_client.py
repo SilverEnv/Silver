@@ -111,6 +111,50 @@ def test_client_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) 
     assert "apikey=env-secret" in url
 
 
+def test_financial_statement_request_captures_raw_response() -> None:
+    payload = b"[]\n"
+    transport = FakeTransport(
+        [
+            FMPTransportResponse(
+                status_code=200,
+                body=payload,
+                headers={"Content-Type": "application/json"},
+            )
+        ]
+    )
+    connection = FakeConnection()
+    client = FMPClient(
+        api_key="real-secret",
+        raw_vault=RawVault(connection),
+        transport=transport,
+        timeout=12.5,
+    )
+
+    result = client.fetch_income_statement("aapl", period="annual", limit=80)
+
+    assert transport.calls == [
+        (
+            "https://financialmodelingprep.com/stable/income-statement?"
+            "apikey=real-secret&limit=80&period=annual&symbol=AAPL",
+            12.5,
+        )
+    ]
+    assert result.endpoint == "/stable/income-statement"
+    assert result.body == payload
+    assert result.request_params == {
+        "apikey": REDACTED_VALUE,
+        "limit": "80",
+        "period": "annual",
+        "symbol": "AAPL",
+    }
+
+    [row] = connection.rows
+    assert row["vendor"] == "fmp"
+    assert row["endpoint"] == "/stable/income-statement"
+    assert row["params"] == result.request_params
+    assert "real-secret" not in row["request_url"]
+
+
 def test_missing_api_key_raises_clear_configuration_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

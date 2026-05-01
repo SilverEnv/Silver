@@ -38,13 +38,14 @@ Include:
 ```text
 source: FMP normalized financial statements
 periods: annual and quarterly
-fetch lookback: 2013 onward
-feature start: 2014 onward
+fetch/normalize start: 2014 onward
 universe: falsifier_seed first
 ```
 
-The 2013 lookback exists so 2014 year-over-year features can compare against a
-prior-year period. V0 features should start in 2014.
+The v0 calendar and price research window start in 2014. Year-over-year
+features should begin only once a comparable prior-year v0 metric exists. With
+2014 as the first normalized fundamentals year, many YoY fundamental features
+will naturally begin in 2015.
 
 Do not ingest everything yet.
 
@@ -192,6 +193,8 @@ currency
 source_system
 source_field
 raw_object_id
+accepted_at
+filing_date
 available_at
 available_at_policy_id
 normalized_by_run_id
@@ -248,6 +251,24 @@ test:
 The first FMP fundamentals objective should stop at raw-vaulted vendor
 responses plus normalized v0 fundamental values. Fundamental feature generation
 and falsifier runs are follow-on objectives.
+
+## Current Entrypoint
+
+The v0 ingest entrypoint is:
+
+```bash
+uv run python scripts/ingest_fmp_fundamentals.py --dry-run --limit 3
+```
+
+Live mode requires `DATABASE_URL`, `FMP_API_KEY`, migrations through
+`009_fmp_fundamental_values.sql`, seeded reference data, seeded trading
+calendar rows, and seeded available-at policies. It writes run metadata as:
+
+```text
+run_kind: fmp_fundamentals_normalization
+table: silver.fundamental_values
+normalization_version: fmp_fundamentals_v0
+```
 
 ## Acceptance Criteria
 

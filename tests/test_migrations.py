@@ -240,3 +240,30 @@ def test_sec_companyfacts_run_kind_migration_allows_raw_ingest_runs() -> None:
     assert "drop constraint analytics_runs_run_kind_check" in sql
     assert "add constraint analytics_runs_run_kind_check" in sql
     assert "'sec_companyfacts_ingest'" in sql
+
+
+def test_fmp_fundamental_values_migration_static_expectations() -> None:
+    migrations = apply_migrations.check_migrations(ROOT / "db" / "migrations")
+    migration = migrations[8]
+    sql = apply_migrations._normalize_sql(migration.sql)
+    body = apply_migrations._table_body(migration.sql, "fundamental_values")
+    normalized_body = " ".join(body.lower().split())
+
+    assert migration.path.name == "009_fmp_fundamental_values.sql"
+    assert "'fmp_fundamentals_normalization'" in sql
+    assert "create table silver.fundamental_values" in sql
+    assert "references silver.raw_objects(id)" in normalized_body
+    assert "references silver.available_at_policies(id)" in normalized_body
+    assert "references silver.analytics_runs(id)" in normalized_body
+    assert "available_at timestamptz not null" in normalized_body
+    assert "accepted_at timestamptz not null" in normalized_body
+    assert "filing_date date not null" in normalized_body
+    assert "check (period_type in ('annual', 'quarterly'))" in normalized_body
+    assert (
+        "check (statement_type in ('income_statement', 'cash_flow_statement'))"
+        in normalized_body
+    )
+    assert (
+        "unique ( security_id, period_end_date, period_type, statement_type, "
+        "metric_name, source_system )"
+    ) in sql
