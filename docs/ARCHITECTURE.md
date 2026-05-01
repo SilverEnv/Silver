@@ -188,6 +188,10 @@ Allowed sources for v1 are FMP, SEC EDGAR, optional Arrow raw byte caches, and
 optional Norgate data later for delistings. Do not depend on Arrow normalized
 tables, Arrow Python code, or analyst-facing views.
 
+FMP normalized fundamentals v0 is defined in `docs/FUNDAMENTALS_V0.md`. In that
+layer, FMP is the modeling source for normalized financial statements while SEC
+remains primary-source evidence, timing support, and reconciliation.
+
 ## FMP Response Audit Boundary
 
 Every FMP HTTP response produced by the transport is raw-vault evidence,
