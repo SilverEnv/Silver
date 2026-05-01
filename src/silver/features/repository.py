@@ -16,6 +16,7 @@ from silver.features.momentum_12_1 import (
     AdjustedDailyPriceObservation,
     NumericFeatureDefinition,
 )
+from silver.features.dollar_volume import AdjustedPriceVolumeObservation
 from silver.time.trading_calendar import TradingCalendarRow
 
 
@@ -208,6 +209,41 @@ class FeatureStoreRepository:
             )
             rows = cursor.fetchall()
         return tuple(_adjusted_price_row(row) for row in rows)
+
+    def load_adjusted_price_volumes(
+        self,
+        *,
+        security_ids: Sequence[int],
+        end_date: date | None,
+        available_at_policy_id: int,
+    ) -> tuple[tuple[int, AdjustedPriceVolumeObservation], ...]:
+        normalized_security_ids = tuple(
+            sorted(
+                {
+                    _positive_int(security_id, "security_id")
+                    for security_id in security_ids
+                }
+            )
+        )
+        _validate_optional_date(end_date, "end_date")
+        normalized_policy_id = _positive_int(
+            available_at_policy_id,
+            "available_at_policy_id",
+        )
+        if not normalized_security_ids:
+            return ()
+
+        with _cursor(self._connection) as cursor:
+            cursor.execute(
+                _SELECT_ADJUSTED_PRICE_VOLUMES_SQL,
+                {
+                    "security_ids": list(normalized_security_ids),
+                    "end_date": end_date,
+                    "available_at_policy_id": normalized_policy_id,
+                },
+            )
+            rows = cursor.fetchall()
+        return tuple(_adjusted_price_volume_row(row) for row in rows)
 
     def write_feature_values(
         self,
@@ -441,6 +477,30 @@ def _adjusted_price_row(
     )
 
 
+def _adjusted_price_volume_row(
+    row: object,
+) -> tuple[int, AdjustedPriceVolumeObservation]:
+    return (
+        _row_int(row, "security_id", 0, "prices_daily.security_id"),
+        AdjustedPriceVolumeObservation(
+            price_date=_row_date(row, "date", 1, "prices_daily.date"),
+            adjusted_close=_optional_row_decimal(
+                row,
+                "adj_close",
+                2,
+                "prices_daily.adj_close",
+            ),
+            volume=_optional_row_int(row, "volume", 3, "prices_daily.volume"),
+            available_at=_row_datetime(
+                row,
+                "available_at",
+                4,
+                "prices_daily.available_at",
+            ),
+        ),
+    )
+
+
 def _json_dumps(value: Mapping[str, Any]) -> str:
     _json_object(value, "json value")
     return json.dumps(
@@ -521,6 +581,15 @@ def _row_int(row: object, key: str, index: int, name: str) -> int:
     return value
 
 
+def _optional_row_int(row: object, key: str, index: int, name: str) -> int | None:
+    value = _row_value(row, key, index)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise FeatureStoreError(f"{name} returned by database must be an integer")
+    return value
+
+
 def _row_str(row: object, key: str, index: int, name: str) -> str:
     return _non_empty_str(_row_value(row, key, index), name)
 
@@ -580,6 +649,26 @@ def _row_bool(row: object, key: str, index: int, name: str) -> bool:
 
 def _row_decimal(row: object, key: str, index: int, name: str) -> Decimal:
     value = _row_value(row, key, index)
+    if isinstance(value, Decimal):
+        result = value
+    elif isinstance(value, (str, int)):
+        result = Decimal(str(value))
+    else:
+        raise FeatureStoreError(f"{name} returned by database must be numeric")
+    if not result.is_finite() or result <= 0:
+        raise FeatureStoreError(f"{name} returned by database must be positive")
+    return result
+
+
+def _optional_row_decimal(
+    row: object,
+    key: str,
+    index: int,
+    name: str,
+) -> Decimal | None:
+    value = _row_value(row, key, index)
+    if value is None:
+        return None
     if isinstance(value, Decimal):
         result = value
     elif isinstance(value, (str, int)):
@@ -670,6 +759,23 @@ ORDER BY date;
 
 _SELECT_ADJUSTED_PRICES_SQL = """
 SELECT prices.security_id, prices.date, prices.adj_close, prices.available_at
+FROM silver.prices_daily AS prices
+JOIN silver.analytics_runs AS run
+  ON run.id = prices.normalized_by_run_id
+WHERE run.status = 'succeeded'
+  AND prices.security_id = ANY(%(security_ids)s)
+  AND prices.available_at_policy_id = %(available_at_policy_id)s
+  AND (%(end_date)s::date IS NULL OR prices.date <= %(end_date)s::date)
+ORDER BY prices.security_id, prices.date;
+""".strip()
+
+_SELECT_ADJUSTED_PRICE_VOLUMES_SQL = """
+SELECT
+    prices.security_id,
+    prices.date,
+    prices.adj_close,
+    prices.volume,
+    prices.available_at
 FROM silver.prices_daily AS prices
 JOIN silver.analytics_runs AS run
   ON run.id = prices.normalized_by_run_id

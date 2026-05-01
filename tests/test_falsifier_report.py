@@ -48,6 +48,7 @@ def test_report_rendering_is_deterministic_and_contains_required_sections() -> N
 
     report = FalsifierReport(
         strategy="momentum_12_1",
+        selection_direction="high",
         horizon=5,
         universe_name="falsifier_seed",
         universe_members=(
@@ -163,7 +164,7 @@ def test_report_rendering_is_deterministic_and_contains_required_sections() -> N
     rendered = render_week_1_momentum_report(report)
 
     assert rendered == render_week_1_momentum_report(report)
-    assert "# Week 1 Momentum Falsifier Report" in rendered
+    assert "# Falsifier Report: momentum_12_1" in rendered
     assert "No alpha claim is made" in rendered
     assert "## Data Coverage" in rendered
     assert "## Universe" in rendered
@@ -176,6 +177,7 @@ def test_report_rendering_is_deterministic_and_contains_required_sections() -> N
     assert "## Failure Modes" in rendered
     assert "## Reproducibility" in rendered
     assert "| Horizon | 5 trading sessions |" in rendered
+    assert "| Selection direction | high |" in rendered
     assert "| Feature version | momentum_12_1 v1 |" in rendered
     assert "| model_run_id | 101 |" in rendered
     assert "| model_run_key | model-run-momentum-12-1-202401 |" in rendered
@@ -240,7 +242,7 @@ def test_missing_prerequisite_message_names_materialization_step() -> None:
     )
 
     assert message is not None
-    assert "momentum feature materialization step" in message
+    assert "feature-candidate materialization step" in message
     assert "momentum_12_1" in message
 
 

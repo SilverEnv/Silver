@@ -96,9 +96,10 @@ class FalsifierEvidence:
 
 @dataclass(frozen=True, slots=True)
 class FalsifierReport:
-    """Complete markdown-renderable Week 1 momentum report."""
+    """Complete markdown-renderable falsifier report."""
 
     strategy: str
+    selection_direction: str
     horizon: int
     universe_name: str
     universe_members: tuple[UniverseMember, ...]
@@ -107,6 +108,7 @@ class FalsifierReport:
     backtest_result: MomentumFalsifierResult
     reproducibility: FalsifierReproducibilityMetadata
     evidence: FalsifierEvidence = field(default_factory=FalsifierEvidence)
+    report_path: str = "reports/falsifier/week_1_momentum.md"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,12 +122,12 @@ class FalsifierInputCounts:
 
 
 def render_week_1_momentum_report(report: FalsifierReport) -> str:
-    """Render deterministic markdown for the Phase 1 Week 1 momentum report."""
+    """Render deterministic markdown for a persisted numeric-feature falsifier."""
 
     result = report.backtest_result
     metrics = result.headline_metrics
     lines = [
-        "# Week 1 Momentum Falsifier Report",
+        f"# Falsifier Report: {report.strategy}",
         "",
         f"Status: {result.status}",
         "",
@@ -138,13 +140,14 @@ def render_week_1_momentum_report(report: FalsifierReport) -> str:
             ("Field", "Value"),
             (
                 ("Strategy", report.strategy),
+                ("Selection direction", report.selection_direction),
                 ("Universe", report.universe_name),
                 ("Horizon", f"{report.horizon} trading sessions"),
                 (
                     "Feature version",
                     f"{report.feature_metadata.name} v{report.feature_metadata.version}",
                 ),
-                ("Report path", "reports/falsifier/week_1_momentum.md"),
+                ("Report path", report.report_path),
             ),
         ),
         "",
@@ -219,7 +222,7 @@ def render_week_1_momentum_report(report: FalsifierReport) -> str:
         "## Baseline Comparison",
         "",
         _table(
-            ("Metric", "Momentum strategy", "Equal-weight universe", "Difference"),
+            ("Metric", "Candidate strategy", "Equal-weight universe", "Difference"),
             (
                 (
                     "Mean gross horizon return",
@@ -349,7 +352,7 @@ def missing_prerequisite_message(
     if counts.feature_values == 0:
         return (
             f"Missing prerequisite data: no persisted `{strategy}` feature values "
-            f"exist for universe `{universe}`. Run the momentum feature "
+            f"exist for universe `{universe}`. Run the feature-candidate "
             "materialization step after daily prices are normalized."
         )
     if counts.labels == 0:

@@ -807,6 +807,8 @@ Examples:
 - `momentum_12_1` — return from t-252d to t-21d, excluding most recent 21 days
 - `avg_dollar_volume_63` — average `adj_close * volume` over trailing 63 visible
   daily price rows
+- `realized_volatility_63` — annualized sample stdev of daily returns over
+  trailing 63 visible daily price rows
 - `volatility_30d` — annualized stdev of daily log returns over trailing 30 days
 - `revenue_growth_yoy` — TTM revenue / prior-TTM revenue minus 1
 - `gross_margin_change_yoy` — current TTM gross margin minus prior TTM gross margin
@@ -1074,6 +1076,12 @@ Quality gate between tiers: structured output validates against schema, confiden
 - Adversarial critic finds no PIT violation
 - Capacity > $1M
 - Decay curve doesn't crash to zero in <30 days
+
+Feature Candidate Pack v0 is an early manual candidate stage, not a validation
+claim. It runs a small fixed family of numeric hypotheses through the same
+falsifier and registry path so failed ideas are visible instead of forgotten.
+Family-level multiple-comparisons correction remains a required promotion gate
+before any candidate moves beyond exploratory evidence.
 
 **validated → live:** at least 3 months of paper-trading performance consistent with backtest expectation (within 30% of expected Sharpe).
 

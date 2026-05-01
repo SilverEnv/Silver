@@ -38,7 +38,9 @@ python scripts/seed_available_at_policies.py --check
 python scripts/seed_reference_data.py --check
 python scripts/seed_trading_calendar.py --check
 python scripts/materialize_momentum_12_1.py --check
+python scripts/materialize_feature_candidates.py --check
 python scripts/check_falsifier_inputs.py --check
+python scripts/run_feature_candidate_pack.py --check
 python -m pytest
 ruff check .
 ```
@@ -114,6 +116,21 @@ truth. In particular:
   than creating detached evaluation notes.
 - CLI rendering tests should prove the operator can see the latest linked
   backtest identity without querying Postgres by hand.
+
+## Feature Candidate Pack
+
+Feature candidate pack tests must prove the pack has stable candidate keys,
+each candidate materializes only point-in-time feature values, candidate
+metadata records the selection direction, and the batch runner links each
+hypothesis to a durable `backtest_run_id`.
+
+The generic falsifier tests must cover both high-is-better and low-is-better
+ranking. Low-direction candidates should keep raw feature values in
+`feature_values` and invert only the ranking input used by the falsifier. The
+deterministic model and backtest identity must distinguish non-default
+`selection_direction` values while preserving legacy `high` as the implicit
+default, so replaying a low-volatility candidate cannot silently become a
+high-volatility candidate.
 
 ## Reporting
 
