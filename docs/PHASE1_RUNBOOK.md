@@ -126,6 +126,20 @@ python scripts/materialize_momentum_12_1.py --dry-run --universe falsifier_seed
 python scripts/materialize_momentum_12_1.py --universe falsifier_seed
 ```
 
+Feature Candidate Pack v0 materializes the first small set of deterministic
+numeric candidates for multi-hypothesis evaluation:
+
+- `momentum_12_1`, where high values are selected
+- `avg_dollar_volume_63`, where high values are selected
+- `low_realized_volatility_63`, which uses the persisted
+  `realized_volatility_63` feature and tells the falsifier to select low values
+
+```bash
+python scripts/materialize_feature_candidates.py --check
+python scripts/materialize_feature_candidates.py --dry-run --universe falsifier_seed
+python scripts/materialize_feature_candidates.py --universe falsifier_seed
+```
+
 ## 5. Run The Falsifier
 
 Validate the falsifier CLI/config/report path first:
@@ -138,6 +152,16 @@ Run the Phase 1 report:
 
 ```bash
 python scripts/run_falsifier.py --strategy momentum_12_1 --horizon 63 --universe falsifier_seed
+```
+
+The same falsifier can rank any persisted numeric feature. For candidates where
+lower feature values are the hypothesis, pass `--selection-direction low`; the
+stored feature value remains raw, and the backtest metadata records the
+direction used for ranking.
+
+```bash
+python scripts/run_falsifier.py --strategy avg_dollar_volume_63 --horizon 63 --universe falsifier_seed --output-path reports/falsifier/candidate_pack/avg_dollar_volume_63_h63.md
+python scripts/run_falsifier.py --strategy realized_volatility_63 --selection-direction low --horizon 63 --universe falsifier_seed --output-path reports/falsifier/candidate_pack/low_realized_volatility_63_h63.md
 ```
 
 The default report is written to:
@@ -213,6 +237,25 @@ Inspect the current registry:
 python scripts/manage_hypotheses.py list
 ```
 
+To run Feature Candidate Pack v0 as one multi-hypothesis evaluation, use:
+
+```bash
+python scripts/run_feature_candidate_pack.py --check
+python scripts/run_feature_candidate_pack.py --universe falsifier_seed --horizon 63
+```
+
+The pack refreshes candidate feature values by default, upserts each hypothesis,
+runs the falsifier for each candidate, records the linked durable backtest
+evaluation, and prints a small scoreboard. Per-candidate reports are written
+under:
+
+```text
+reports/falsifier/candidate_pack/
+```
+
+Use `--skip-materialize` only when you intentionally want to evaluate the
+feature values already in the database.
+
 This registry is navigation memory. The authoritative evidence remains the
 linked `backtest_runs` and `model_runs` metadata plus replay proof.
 Recording an evaluation moves the hypothesis status to `promising`,
@@ -239,7 +282,7 @@ comparison, and reproducibility metadata.
 | `psycopg is required` or `Python import psycopg: unavailable` | The active Python environment is missing project dependencies. | Run `uv sync --locked --group dev --python 3.10` and activate `.venv`. |
 | `database connectivity` fails | `DATABASE_URL` is present but Postgres rejected or could not reach it. | Fix the database URL, user/role, password, host, or database before running live pipeline commands. |
 | `If the schema is missing, run python scripts/bootstrap_database.py first` | The database is reachable but not bootstrapped for Silver. | Run the bootstrap commands in section 2. |
-| `feature definition momentum_12_1 is not persisted` | Momentum feature materialization has not written its metadata yet. | Run `python scripts/materialize_momentum_12_1.py --universe falsifier_seed`. |
-| `no persisted momentum_12_1 feature values exist` | Feature rows are missing for the requested universe. | Re-run momentum feature materialization after price ingest. |
+| `feature definition ... is not persisted` | The requested feature materialization has not written its metadata yet. | Run `python scripts/materialize_feature_candidates.py --universe falsifier_seed`, or run the specific feature materializer. |
+| `no persisted ... feature values exist` | Feature rows are missing for the requested universe. | Re-run feature candidate materialization after price ingest. |
 | `no forward-return labels exist` | Label rows are missing for the requested horizon. | Re-run forward-label materialization after price ingest. |
 | `feature values and forward-return labels do not overlap` | Features and labels cover different security/date pairs. | Re-run labels and features over the same price coverage. |

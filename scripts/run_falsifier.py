@@ -122,6 +122,7 @@ class PersistedFalsifierInputs:
     rows: tuple[MomentumBacktestRow, ...]
     available_at_policy_versions: Mapping[str, int]
     target_kind: str
+    selection_direction: str = "high"
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +151,7 @@ class FalsifierReplayPlan:
     backtest_run_id: int
     backtest_run_key: str
     strategy: str
+    selection_direction: str
     universe: str
     horizon: int
     target_kind: str
@@ -220,8 +222,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--strategy",
         default=TARGET_STRATEGY,
-        choices=(TARGET_STRATEGY,),
-        help="falsifier strategy to run",
+        help="persisted numeric feature name to rank",
+    )
+    parser.add_argument(
+        "--selection-direction",
+        choices=("high", "low"),
+        default="high",
+        help="select the high or low half of feature values; defaults to high",
     )
     parser.add_argument(
         "--horizon",
@@ -487,6 +494,7 @@ def run_report_with_metadata(
     persisted_inputs = load_persisted_inputs(
         client,
         strategy=args.strategy,
+        selection_direction=args.selection_direction,
         horizon=args.horizon,
         universe=args.universe,
     )
@@ -563,6 +571,7 @@ def run_report_with_metadata(
     )
     report = FalsifierReport(
         strategy=args.strategy,
+        selection_direction=args.selection_direction,
         horizon=args.horizon,
         universe_name=args.universe,
         universe_members=persisted_inputs.universe_members,
@@ -597,6 +606,7 @@ def run_report_with_metadata(
             execution_assumptions=_execution_assumptions(),
         ),
         evidence=_report_evidence(backtest_finish),
+        report_path=_display_path(args.output_path),
     )
     finished_model = _finish_or_reuse_model_run(
         metadata_repository,
@@ -630,9 +640,11 @@ def load_persisted_inputs(
     client: PsqlJsonClient,
     *,
     strategy: str,
+    selection_direction: str,
     horizon: int,
     universe: str,
 ) -> PersistedFalsifierInputs:
+    _validate_selection_direction(selection_direction)
     universe_members = _load_universe_members(client, universe)
     feature_definition = _load_feature_definition(client, strategy)
     counts = _load_input_counts(
@@ -659,6 +671,7 @@ def load_persisted_inputs(
     rows = _load_backtest_rows(
         client,
         feature_definition_id=feature_definition.id,
+        selection_direction=selection_direction,
         horizon=horizon,
         universe=universe,
     )
@@ -673,6 +686,7 @@ def load_persisted_inputs(
             universe=universe,
         ),
         target_kind=target_kind,
+        selection_direction=selection_direction,
     )
 
 
@@ -724,6 +738,11 @@ def _falsifier_replay_plan(snapshot: BacktestTraceabilitySnapshot) -> FalsifierR
         "strategy",
         "backtest_runs.parameters.strategy",
     )
+    selection_direction = _optional_replay_param_str(
+        snapshot.backtest_parameters,
+        "selection_direction",
+        "backtest_runs.parameters.selection_direction",
+    ) or "high"
     universe = snapshot.backtest_universe_name
     target_kind = snapshot.backtest_target_kind
     input_fingerprint = _replay_param_str(
@@ -740,6 +759,7 @@ def _falsifier_replay_plan(snapshot: BacktestTraceabilitySnapshot) -> FalsifierR
         backtest_run_id=snapshot.backtest_run_id,
         backtest_run_key=snapshot.backtest_run_key,
         strategy=strategy,
+        selection_direction=selection_direction,
         universe=universe,
         horizon=snapshot.backtest_horizon_days,
         target_kind=target_kind,
@@ -790,6 +810,11 @@ def _validate_accepted_replay_snapshot(
             "model_runs.parameters.strategy",
             snapshot.model_parameters.get("strategy"),
             snapshot.backtest_parameters.get("strategy"),
+        ),
+        (
+            "parameters.selection_direction",
+            _stored_selection_direction(snapshot.model_parameters),
+            _stored_selection_direction(snapshot.backtest_parameters),
         ),
         (
             "model_runs.parameters.universe",
@@ -942,12 +967,38 @@ def _optional_replay_param_str(
     return value.strip()
 
 
+def _stored_selection_direction(mapping: Mapping[str, Any]) -> object:
+    value = mapping.get("selection_direction")
+    if value is None:
+        return "high"
+    return value
+
+
 def _backtest_run_create(
     args: argparse.Namespace,
     *,
     model_run: ModelRunRecord,
     persisted_inputs: PersistedFalsifierInputs,
 ) -> BacktestRunCreate:
+    parameters = {
+        "command": _target_command(args),
+        "feature_definition": _feature_definition_parameters(
+            persisted_inputs.feature_definition,
+        ),
+        "label_scramble_alpha": LABEL_SCRAMBLE_ALPHA,
+        "label_scramble_seed": DEFAULT_LABEL_SCRAMBLE_SEED,
+        "label_scramble_trial_count": DEFAULT_LABEL_SCRAMBLE_TRIAL_COUNT,
+        "metadata_role": "backtest_run",
+        "min_train_sessions": DEFAULT_MIN_TRAIN_SESSIONS,
+        "model_run_key": model_run.model_run_key,
+        "multiple_comparisons_correction": MULTIPLE_COMPARISONS_CORRECTION,
+        "step_sessions": DEFAULT_STEP_SESSIONS,
+        "strategy": args.strategy,
+        "target_kind": persisted_inputs.target_kind,
+        "test_sessions": DEFAULT_TEST_SESSIONS,
+        "universe": args.universe,
+    }
+    parameters.update(_selection_direction_parameters(args.selection_direction))
     return BacktestRunCreate(
         backtest_run_key=_backtest_run_key(args, model_run.model_run_key),
         model_run_id=model_run.id,
@@ -956,24 +1007,7 @@ def _backtest_run_create(
         horizon_days=args.horizon,
         target_kind=persisted_inputs.target_kind,
         cost_assumptions=_cost_assumptions(None),
-        parameters={
-            "command": _target_command(args),
-            "feature_definition": _feature_definition_parameters(
-                persisted_inputs.feature_definition,
-            ),
-            "label_scramble_alpha": LABEL_SCRAMBLE_ALPHA,
-            "label_scramble_seed": DEFAULT_LABEL_SCRAMBLE_SEED,
-            "label_scramble_trial_count": DEFAULT_LABEL_SCRAMBLE_TRIAL_COUNT,
-            "metadata_role": "backtest_run",
-            "min_train_sessions": DEFAULT_MIN_TRAIN_SESSIONS,
-            "model_run_key": model_run.model_run_key,
-            "multiple_comparisons_correction": MULTIPLE_COMPARISONS_CORRECTION,
-            "step_sessions": DEFAULT_STEP_SESSIONS,
-            "strategy": args.strategy,
-            "target_kind": persisted_inputs.target_kind,
-            "test_sessions": DEFAULT_TEST_SESSIONS,
-            "universe": args.universe,
-        },
+        parameters=parameters,
         multiple_comparisons_correction=MULTIPLE_COMPARISONS_CORRECTION,
     )
 
@@ -999,6 +1033,7 @@ def _backtest_run_key(args: argparse.Namespace, model_run_key: str) -> str:
         },
         "version": 2,
     }
+    payload.update(_selection_direction_parameters(args.selection_direction))
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -1113,6 +1148,7 @@ def _invocation_parameters(
         "model_run_key": model_run.model_run_key,
         "output_path": _display_path(args.output_path),
         "process_id": os.getpid(),
+        "selection_direction": args.selection_direction,
         "strategy": args.strategy,
         "universe": args.universe,
     }
@@ -1515,7 +1551,7 @@ FROM (
     if not rows:
         raise FalsifierCliError(
             f"Missing prerequisite data: feature definition `{strategy}` is not "
-            "persisted. Run the momentum feature materialization step after "
+            "persisted. Run the feature-candidate materialization step after "
             "daily prices are normalized."
         )
     row = rows[0]
@@ -1585,9 +1621,13 @@ def _load_backtest_rows(
     client: PsqlJsonClient,
     *,
     feature_definition_id: int,
+    selection_direction: str,
     horizon: int,
     universe: str,
 ) -> tuple[MomentumBacktestRow, ...]:
+    feature_value_expression = (
+        "-fv.value" if selection_direction == "low" else "fv.value"
+    )
     rows = client.fetch_json(
         f"""
 SELECT COALESCE(jsonb_agg(to_jsonb(row) ORDER BY asof_date, ticker), '[]'::jsonb)::text
@@ -1596,7 +1636,7 @@ FROM (
         s.ticker,
         fv.asof_date::text AS asof_date,
         frl.horizon_date::text AS horizon_date,
-        fv.value::float8 AS feature_value,
+        ({feature_value_expression})::float8 AS feature_value,
         COALESCE(
             frl.realized_excess_return,
             frl.realized_raw_return
@@ -1857,7 +1897,7 @@ def _model_run_create(
             target_kind=persisted_inputs.target_kind,
             window=window,
         ),
-        name=FALSIFIER_MODEL_RUN_NAME,
+        name=_model_run_name(args),
         code_git_sha=git_sha,
         feature_set_hash=feature_set_hash,
         training_start_date=window.training_start_date,
@@ -1886,7 +1926,7 @@ def _model_run_parameters(
     persisted_inputs: PersistedFalsifierInputs,
     window: ModelRunWindow,
 ) -> dict[str, object]:
-    return {
+    parameters = {
         "command": _target_command(args),
         "feature_definition": _feature_definition_parameters(
             persisted_inputs.feature_definition,
@@ -1898,6 +1938,22 @@ def _model_run_parameters(
         "universe": args.universe,
         "window_source": window.source,
     }
+    parameters.update(_selection_direction_parameters(persisted_inputs.selection_direction))
+    return parameters
+
+
+def _model_run_name(args: argparse.Namespace) -> str:
+    if args.strategy == TARGET_STRATEGY and args.selection_direction == "high":
+        return FALSIFIER_MODEL_RUN_NAME
+    if args.selection_direction == "low":
+        return f"low {args.strategy} falsifier"
+    return f"{args.strategy} falsifier"
+
+
+def _selection_direction_parameters(selection_direction: str) -> dict[str, str]:
+    if selection_direction == "high":
+        return {}
+    return {"selection_direction": selection_direction}
 
 
 def _feature_definition_parameters(
@@ -1955,6 +2011,14 @@ def _model_run_key(
     target_kind: str,
     window: ModelRunWindow,
 ) -> str:
+    run_config = {
+        "min_train_sessions": DEFAULT_MIN_TRAIN_SESSIONS,
+        "step_sessions": DEFAULT_STEP_SESSIONS,
+        "strategy": args.strategy,
+        "test_sessions": DEFAULT_TEST_SESSIONS,
+        "universe": args.universe,
+    }
+    run_config.update(_selection_direction_parameters(args.selection_direction))
     payload = {
         "available_at_policy_versions": dict(available_at_policy_versions),
         "contract": "falsifier-model-run-identity",
@@ -1963,13 +2027,7 @@ def _model_run_key(
         "git_sha": git_sha,
         "horizon": args.horizon,
         "input_fingerprint": input_fingerprint,
-        "run_config": {
-            "min_train_sessions": DEFAULT_MIN_TRAIN_SESSIONS,
-            "step_sessions": DEFAULT_STEP_SESSIONS,
-            "strategy": args.strategy,
-            "test_sessions": DEFAULT_TEST_SESSIONS,
-            "universe": args.universe,
-        },
+        "run_config": run_config,
         "random_seed": FALSIFIER_RANDOM_SEED,
         "target_kind": target_kind,
         "test_end_date": window.test_end_date.isoformat(),
@@ -2193,6 +2251,11 @@ def _traceability_mismatches(
         ),
         ("model_runs.metrics", snapshot.model_metrics, _model_run_metrics(result)),
         (
+            "model_runs.parameters.selection_direction",
+            _stored_selection_direction(snapshot.model_parameters),
+            report.selection_direction,
+        ),
+        (
             "model_runs.available_at_policy_versions",
             snapshot.model_available_at_policy_versions,
             report.reproducibility.available_at_policy_versions,
@@ -2256,6 +2319,11 @@ def _traceability_mismatches(
             "backtest_runs.multiple_comparisons_correction",
             snapshot.backtest_multiple_comparisons_correction,
             MULTIPLE_COMPARISONS_CORRECTION,
+        ),
+        (
+            "backtest_runs.parameters.selection_direction",
+            _stored_selection_direction(snapshot.backtest_parameters),
+            report.selection_direction,
         ),
     ]
 
@@ -2392,13 +2460,9 @@ def _args_from_replay_plan(
     args: argparse.Namespace,
     plan: FalsifierReplayPlan,
 ) -> argparse.Namespace:
-    if plan.strategy != TARGET_STRATEGY:
-        raise FalsifierCliError(
-            f"falsifier replay only supports strategy {TARGET_STRATEGY}; "
-            f"stored run uses {plan.strategy}"
-        )
     replay_args = argparse.Namespace(
         strategy=plan.strategy,
+        selection_direction=plan.selection_direction,
         horizon=plan.horizon,
         universe=plan.universe,
         output_path=args.output_path,
@@ -2427,6 +2491,7 @@ def _render_replay_inputs(plan: FalsifierReplayPlan) -> str:
     return (
         "Replay inputs: "
         f"strategy={plan.strategy}; "
+        f"selection_direction={plan.selection_direction}; "
         f"universe={plan.universe}; "
         f"horizon={plan.horizon}; "
         f"target_kind={plan.target_kind}; "
@@ -2442,11 +2507,14 @@ def _replay_command(plan: FalsifierReplayPlan) -> str:
 
 
 def _resolved_run_command(plan: FalsifierReplayPlan) -> str:
-    return TARGET_COMMAND_TEMPLATE.format(
+    command = TARGET_COMMAND_TEMPLATE.format(
         strategy=plan.strategy,
         horizon=plan.horizon,
         universe=plan.universe,
     )
+    if plan.selection_direction != "high":
+        command += f" --selection-direction {plan.selection_direction}"
+    return command
 
 
 def _stable_json_token(value: Mapping[str, Any]) -> str:
@@ -2462,6 +2530,7 @@ def _replay_mismatch_message(replay: FalsifierReplayRun) -> str:
 
 
 def _validate_args(args: argparse.Namespace) -> None:
+    _validate_selection_direction(args.selection_direction)
     if args.horizon not in CANONICAL_HORIZONS:
         allowed = ", ".join(str(horizon) for horizon in CANONICAL_HORIZONS)
         raise FalsifierCliError(f"horizon must be one of {allowed}; got {args.horizon}")
@@ -2498,6 +2567,11 @@ def _validate_args(args: argparse.Namespace) -> None:
     _validate_report_path(args.output_path)
 
 
+def _validate_selection_direction(value: str) -> None:
+    if value not in {"high", "low"}:
+        raise FalsifierCliError("selection_direction must be high or low")
+
+
 def _validate_report_path(path: Path) -> None:
     report_path = _resolve_repo_path(path)
     try:
@@ -2523,11 +2597,14 @@ def _display_path(path: Path) -> str:
 
 
 def _target_command(args: argparse.Namespace) -> str:
-    return TARGET_COMMAND_TEMPLATE.format(
+    command = TARGET_COMMAND_TEMPLATE.format(
         strategy=args.strategy,
         horizon=args.horizon,
         universe=args.universe,
     )
+    if args.selection_direction != "high":
+        command += f" --selection-direction {args.selection_direction}"
+    return command
 
 
 def _git_sha() -> str:

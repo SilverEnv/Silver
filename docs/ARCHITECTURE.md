@@ -127,6 +127,27 @@ agent idea and replayable backtest evidence:
   proposal loop exists. Automation should only build on this registry after the
   manual path is observable and repeatable.
 
+Feature Candidate Pack v0 is the first manual multi-hypothesis bridge. It
+defines a small fixed set of deterministic numeric candidates, materializes the
+needed feature values, runs one generic rank falsifier per candidate, and links
+the resulting durable backtest rows back into the hypothesis registry.
+
+- Candidate materialization remains in the feature-store layer. It may read
+  normalized prices and point-in-time universe membership, but it must not read
+  labels, backtest metrics, or hypothesis outcomes.
+- The falsifier reads one persisted numeric feature at a time and joins it to
+  already materialized labels. `selection_direction = high` ranks larger raw
+  values higher. `selection_direction = low` keeps raw feature values unchanged
+  in `silver.feature_values` and only flips the ranking score inside the
+  falsifier input.
+- Model-run and backtest-run deterministic identity distinguish non-default
+  `selection_direction` values while preserving `high` as the implicit legacy
+  default. High-volatility and low-volatility are different hypotheses even
+  when they share the same raw feature definition.
+- The candidate pack can upsert hypotheses and record evaluations, but the
+  authoritative evidence remains the linked `backtest_runs` and `model_runs`
+  rows plus replay validation.
+
 For a clean local Postgres database, prefer the single bootstrap command:
 
 ```bash

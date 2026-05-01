@@ -212,6 +212,43 @@ def test_load_policy_versions_rejects_conflicting_versions_for_same_policy() -> 
         )
 
 
+@pytest.mark.parametrize(
+    ("selection_direction", "expected_expression", "feature_value"),
+    (
+        ("high", "(fv.value)::float8 AS feature_value", 2.5),
+        ("low", "(-fv.value)::float8 AS feature_value", -2.5),
+    ),
+)
+def test_load_backtest_rows_respects_selection_direction(
+    selection_direction: str,
+    expected_expression: str,
+    feature_value: float,
+) -> None:
+    client = FakeRowsClient(
+        [
+            {
+                "ticker": "AAA",
+                "asof_date": "2024-01-02",
+                "horizon_date": "2024-04-02",
+                "feature_value": feature_value,
+                "realized_return": 0.03,
+            }
+        ]
+    )
+
+    rows = cli._load_backtest_rows(
+        client,
+        feature_definition_id=17,
+        selection_direction=selection_direction,
+        horizon=63,
+        universe="falsifier_seed",
+    )
+
+    assert expected_expression in client.sql
+    assert rows[0].ticker == "AAA"
+    assert rows[0].feature_value == pytest.approx(feature_value)
+
+
 def test_model_run_create_uses_stable_key_for_same_frozen_metadata(
     tmp_path: Path,
 ) -> None:
@@ -360,7 +397,111 @@ def test_deterministic_run_payloads_ignore_invocation_output_path(
     assert first_model.parameters == second_model.parameters
     assert first_backtest.backtest_run_key == second_backtest.backtest_run_key
     assert first_backtest.parameters == second_backtest.parameters
+    assert "selection_direction" not in first_model.parameters
+    assert "selection_direction" not in first_backtest.parameters
     assert "output_path" not in first_backtest.parameters
+
+
+def test_low_selection_direction_participates_in_deterministic_payloads(
+    tmp_path: Path,
+) -> None:
+    calendar = _calendar()
+    rows = _momentum_rows(calendar, session_count=420)
+    persisted_inputs = _persisted_inputs(rows=rows)
+    high_args = cli.parse_args(
+        [
+            "--strategy",
+            "realized_volatility_63",
+            "--database-url",
+            "postgresql://user:pass@localhost/silver",
+            "--output-path",
+            str(tmp_path / "high.md"),
+        ]
+    )
+    low_args = cli.parse_args(
+        [
+            "--strategy",
+            "realized_volatility_63",
+            "--selection-direction",
+            "low",
+            "--database-url",
+            "postgresql://user:pass@localhost/silver",
+            "--output-path",
+            str(tmp_path / "low.md"),
+        ]
+    )
+    low_inputs = replace(persisted_inputs, selection_direction="low")
+    feature_set_hash = cli._feature_set_hash(persisted_inputs.feature_definition)
+    input_fingerprint = cli.fingerprint_momentum_inputs(rows)
+    data_coverage = cli.coverage_from_rows(rows)
+    model_window = cli._model_run_window(
+        persisted_inputs.rows,
+        calendar=calendar,
+        horizon=high_args.horizon,
+    )
+
+    high_model = cli._model_run_create(
+        high_args,
+        persisted_inputs=persisted_inputs,
+        feature_set_hash=feature_set_hash,
+        git_sha="abcdef0",
+        input_fingerprint=input_fingerprint,
+        data_coverage=data_coverage,
+        window=model_window,
+    )
+    low_model = cli._model_run_create(
+        low_args,
+        persisted_inputs=low_inputs,
+        feature_set_hash=feature_set_hash,
+        git_sha="abcdef0",
+        input_fingerprint=input_fingerprint,
+        data_coverage=data_coverage,
+        window=model_window,
+    )
+    high_model_record = cli.ModelRunRecord(
+        id=1,
+        model_run_key=high_model.model_run_key,
+        status="running",
+    )
+    low_model_record = cli.ModelRunRecord(
+        id=2,
+        model_run_key=low_model.model_run_key,
+        status="running",
+    )
+    high_backtest = cli._backtest_run_create(
+        high_args,
+        model_run=high_model_record,
+        persisted_inputs=persisted_inputs,
+    )
+    low_backtest = cli._backtest_run_create(
+        low_args,
+        model_run=low_model_record,
+        persisted_inputs=low_inputs,
+    )
+
+    assert high_model.model_run_key != low_model.model_run_key
+    assert high_backtest.backtest_run_key != low_backtest.backtest_run_key
+    assert "selection_direction" not in high_model.parameters
+    assert "selection_direction" not in high_backtest.parameters
+    assert low_model.parameters["selection_direction"] == "low"
+    assert low_backtest.parameters["selection_direction"] == "low"
+
+
+def test_model_run_name_reflects_generic_candidate_direction() -> None:
+    momentum_args = cli.parse_args([])
+    low_vol_args = cli.parse_args(
+        [
+            "--strategy",
+            "realized_volatility_63",
+            "--selection-direction",
+            "low",
+        ]
+    )
+
+    assert cli._model_run_name(momentum_args) == "Momentum 12-1 falsifier"
+    assert cli._model_run_name(low_vol_args) == (
+        "low realized_volatility_63 falsifier"
+    )
 
 
 def test_report_run_records_invocation_metadata_outside_deterministic_keys(
@@ -1319,6 +1460,16 @@ class FakeInvocationRepository:
 
 class FakePolicyVersionClient:
     def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        self.sql = ""
+
+    def fetch_json(self, sql: str) -> Any:
+        self.sql = sql
+        return self.payload
+
+
+class FakeRowsClient:
+    def __init__(self, payload: list[dict[str, Any]]) -> None:
         self.payload = payload
         self.sql = ""
 
