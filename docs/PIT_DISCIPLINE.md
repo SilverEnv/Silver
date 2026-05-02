@@ -46,9 +46,11 @@ The seed command reads `DATABASE_URL` from the environment unless
 
 Phase 1 US equity sessions are configured in `config/trading_calendar.yaml` and
 seeded from `db/seed/trading_calendar.csv`. The seed file covers every calendar
-date from 2014-01-01 through 2026-12-31; weekends and market holidays are
+date from 2013-01-01 through 2026-12-31; weekends and market holidays are
 explicit `is_session = false` rows so missing dates fail closed instead of
-becoming silent calendar-day approximations.
+becoming silent calendar-day approximations. The 2013 rows support
+point-in-time clocks for fiscal-2014 filings and releases whose public
+timestamps can occur before the 2014 price research window begins.
 
 Generate or refresh the deterministic seed CSV:
 

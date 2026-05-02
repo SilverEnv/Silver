@@ -29,7 +29,7 @@ Completion:
 - [x] `.env` is ignored and `.env.example` documents required variables
 - [x] `pyproject.toml` defines the local Python package and test tooling
 - [x] `db/migrations/001_foundation.sql` creates core schema objects
-- [x] Trading calendar is seeded for 2014-2026
+- [x] Trading calendar is seeded for 2013-2026 to support fiscal-2014 filing clocks
 - [x] Seed universe contains 45 liquid equities across major non-REIT sectors
 - [x] Prices can be ingested for the seed universe
 - [x] Phase 1 analytics migration defines normalized prices, forward labels,

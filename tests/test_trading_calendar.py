@@ -42,9 +42,9 @@ def test_default_config_generates_complete_phase_1_range(
     validate_complete_calendar(phase_1_rows, config.start_date, config.end_date)
 
     assert config.canonical_horizons == CANONICAL_HORIZONS
-    assert phase_1_rows[0].date == date(2014, 1, 1)
+    assert phase_1_rows[0].date == date(2013, 1, 1)
     assert phase_1_rows[-1].date == date(2026, 12, 31)
-    assert len(phase_1_rows) == 4_748
+    assert len(phase_1_rows) == 5_113
 
 
 def test_generation_marks_weekends_holidays_and_early_closes(
@@ -123,7 +123,7 @@ def test_build_upsert_sql_is_idempotent(
 
     assert "ON CONFLICT (date) DO UPDATE SET" in sql
     assert "silver.trading_calendar.session_close IS DISTINCT FROM" in sql
-    assert "'2014-01-01'::date, false, NULL, false" in sql
+    assert "'2013-01-01'::date, false, NULL, false" in sql
 
 
 def test_check_command_validates_generated_seed_file() -> None:

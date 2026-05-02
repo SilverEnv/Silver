@@ -137,7 +137,7 @@ def validate_regime_definitions(
 
 
 def default_phase_1_regimes() -> tuple[RegimeDefinition, ...]:
-    """Return the manual regimes covering the 2014-2026 seed calendar."""
+    """Return the manual regimes covering the 2014-2026 research window."""
 
     return DEFAULT_PHASE_1_REGIMES
 
@@ -397,7 +397,7 @@ DEFAULT_PHASE_1_REGIMES = validate_regime_definitions(
             start_date=date(2024, 1, 1),
             end_date=date(2026, 12, 31),
             description=(
-                "Manual calendar split for the current 2014-2026 seed-calendar "
+                "Manual calendar split for the current 2014-2026 research-window "
                 "extension; analysis scaffolding only."
             ),
         ),

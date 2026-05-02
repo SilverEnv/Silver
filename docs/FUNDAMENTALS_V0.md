@@ -42,10 +42,12 @@ fetch/normalize start: 2014 onward
 universe: falsifier_seed first
 ```
 
-The v0 calendar and price research window start in 2014. Year-over-year
-features should begin only once a comparable prior-year v0 metric exists. With
-2014 as the first normalized fundamentals year, many YoY fundamental features
-will naturally begin in 2015.
+The v0 price research window and normalized fundamental fetch window start in
+2014, while the trading calendar starts in 2013 so point-in-time clocks can
+handle fiscal-2014 filings and releases that were published before calendar
+2014. Year-over-year features should begin only once a comparable prior-year
+v0 metric exists. With 2014 as the first normalized fundamentals year, many YoY
+fundamental features will naturally begin in 2015.
 
 Do not ingest everything yet.
 

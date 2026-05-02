@@ -1233,7 +1233,7 @@ Replay procedure:
 │   │   ├── 005_portfolios.sql
 │   │   └── 006_hypotheses.sql
 │   └── seed/
-│       ├── trading_calendar.csv    (10y of NYSE calendar)
+│       ├── trading_calendar.csv    (2013-2026 NYSE calendar support)
 │       └── universe_seed.yaml
 │
 ├── src/silver/
@@ -1307,7 +1307,7 @@ Replay procedure:
 
 Deliverables:
 - Migration `001_foundation.sql` applied
-- Trading calendar seeded for 2014–2026
+- Trading calendar seeded for 2013–2026 to support fiscal-2014 filing clocks
 - 45 initial liquid securities seeded across major non-REIT sectors
 - Universe `falsifier_seed` populated
 - `available_at_policies` table populated with initial policy versions
@@ -1422,7 +1422,7 @@ The most concrete possible week-1 target:
 - Repo bootstrap, virtualenv, pyproject
 - Migration 001 applied
 - 45 securities seeded
-- 10y NYSE calendar seeded
+- 2013-2026 NYSE calendar seeded
 
 **Day 3–4:**
 - FMP client built and tested
