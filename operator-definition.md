@@ -67,6 +67,59 @@ available_at
 `available_at` matters because the system must know when a data value was
 allowed to be used. This prevents lookahead bias.
 
+## Trading Calendar Seed
+
+The trading calendar is the reference table that tells Silver which dates were
+US equity trading sessions.
+
+Table:
+
+```text
+silver.trading_calendar
+```
+
+Checked-in seed file:
+
+```text
+db/seed/trading_calendar.csv
+```
+
+Plain English:
+
+```text
+We do not hand-maintain trading dates. Silver generates the seed from the XNYS
+calendar in pandas_market_calendars, checks the generated rows into Git as a
+CSV for reproducibility, then loads those rows into Postgres.
+```
+
+The CSV exists because this data is small, flat, and foundational. Keeping it
+in Git makes database rebuilds deterministic and makes calendar changes easy to
+review.
+
+The seed records:
+
+```text
+date
+is_session
+session_close
+is_early_close
+```
+
+This is how Silver knows weekends, market holidays, normal closes, and early
+closes. Tests regenerate the calendar from `config/trading_calendar.yaml` and
+compare it to the checked-in CSV, so the seed cannot drift silently from the
+configured `pandas_market_calendars` XNYS source.
+
+The current seed covers:
+
+```text
+2013-01-01 through 2026-12-31
+```
+
+The price research window still starts in 2014. The 2013 calendar rows exist so
+fiscal-2014 filing and release timestamps that occurred in late 2013 can still
+receive correct `available_at` treatment.
+
 ## Labels
 
 Labels are the future answer key.

@@ -76,6 +76,12 @@ closes are represented with `is_early_close = true` and the UTC
 `session_close` timestamp; intraday microstructure beyond the close timestamp
 is out of scope for Phase 1.
 
+The CSV is not a hand-maintained trading-date list. It is the reproducible seed
+artifact generated from the configured XNYS source. The check command
+regenerates rows from `config/trading_calendar.yaml`, validates complete
+calendar-date coverage, and compares the result to the checked-in CSV before
+the rows are loaded into Postgres.
+
 ## Falsifier Evidence
 
 Falsifier run identity must include the available-at policy version set used to
