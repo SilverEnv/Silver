@@ -367,6 +367,33 @@ The command evaluates each configured candidate across the canonical horizons:
 5, 21, 63, 126, 252
 ```
 
+Definitions:
+
+| Term | Meaning |
+| --- | --- |
+| Feature | The value known at as-of date `T`, such as `momentum_6_1` or `gross_margin`. |
+| Feature lookback | The past window used to calculate the feature. For example, `momentum_6_1` looks back 126 trading sessions and skips the latest 21 sessions. |
+| Horizon | The forward-return measurement window after `T`. `h21` means measure return from `T` to 21 trading sessions later. |
+| Trading session | A market trading day. In this repo, "21 trading days" and "21 trading sessions" mean the same thing. |
+| Candidate | A base hypothesis idea from `config/feature_candidates.yaml`, before expanding across horizons. |
+| Horizon-specific key | A candidate key plus `__h<trading_days>`, such as `momentum_6_1__h21`. |
+| Unsuffixed key | The original candidate key, such as `momentum_6_1`. For v0 compatibility, this remains the existing 63-day row from the first candidate-pack run. |
+| Bucket | A non-overlapping walk-forward test block. With the default settings, each bucket scores 63 trading sessions of test dates. |
+| Bucket heatmap | A compact per-bucket stability view. `+` means that bucket beat the equal-weight baseline; `-` means it did not. |
+
+Examples:
+
+```text
+momentum_6_1__h21
+= momentum_6_1 feature
++ high/low direction from the candidate config
++ 21-trading-session forward-return horizon
+
+short_reversal_21_0__h5
+= return_21_0 feature selected low
++ 5-trading-session forward-return horizon
+```
+
 By default, existing linked cells are skipped rather than rerun. Use
 `--rerun-existing` when you intentionally want to refresh already-linked
 evidence. After the sweep, regenerate the research report to see the populated
