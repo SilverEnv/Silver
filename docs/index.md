@@ -22,6 +22,9 @@ and humans building Silver.
   hypotheses
 - [`PROMISING_DEEP_DIVE_V0.md`](PROMISING_DEEP_DIVE_V0.md): operator guide for
   inspecting the first `deep_dive` cell before promoting or expanding research
+- [`CONTROL_INDEPENDENCE_REPORT_V0.md`](CONTROL_INDEPENDENCE_REPORT_V0.md):
+  operator plan for testing whether a promising cell adds evidence beyond
+  momentum, size, and liquidity-like controls before AI hypothesis generation
 - [`TESTING.md`](TESTING.md): validation ladder and phase gates
 - [`SECURITY.md`](SECURITY.md): secrets, vendor data, and local environment
 - [`SYMPHONY.md`](SYMPHONY.md): how to run Symphony against this repository

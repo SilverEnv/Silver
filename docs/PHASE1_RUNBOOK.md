@@ -436,6 +436,17 @@ values, labels, universe membership, and stored walk-forward windows. That
 attribution shows selection frequency, concentration, and same-horizon momentum
 overlap without writing predictions or portfolio rows.
 
+Before turning on AI-generated hypotheses, build the control/independence gate:
+
+```text
+docs/CONTROL_INDEPENDENCE_REPORT_V0.md
+```
+
+This report checks whether `avg_dollar_volume_63__h252` adds evidence beyond
+momentum, size, and liquidity-like exposure. If it cannot establish
+independence, keep the cell as `watch` or treat it as a control exposure rather
+than a standalone research signal.
+
 ## 9. Read The Falsifier Report
 
 Start with `Status`, `Data Coverage`, and `Failure Modes`. Then check
