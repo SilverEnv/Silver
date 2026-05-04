@@ -406,6 +406,20 @@ python scripts/research_results_report.py
 Do not add AI-generated hypotheses until this matrix is populated; otherwise
 the AI will be proposing into a partially mapped search space.
 
+### Promising Candidate Review
+
+After the horizon matrix is populated, review promising cells before adding new
+hypotheses or promoting anything to accepted evidence. The operating guide is:
+
+```text
+docs/PROMISING_CANDIDATE_REVIEW_V0.md
+```
+
+The generated cockpit includes a `Promising Candidate Review` table that labels
+each promising cell as `deep_dive`, `watch`, or `demote`. It does not mutate
+hypothesis status. The goal is to decide where to spend the next research cycle
+before widening the search space.
+
 ## 9. Read The Falsifier Report
 
 Start with `Status`, `Data Coverage`, and `Failure Modes`. Then check

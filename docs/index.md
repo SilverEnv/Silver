@@ -17,6 +17,9 @@ and humans building Silver.
   rules
 - [`PHASE1_RUNBOOK.md`](PHASE1_RUNBOOK.md): local Phase 1 preflight and
   falsifier runbook
+- [`PROMISING_CANDIDATE_REVIEW_V0.md`](PROMISING_CANDIDATE_REVIEW_V0.md):
+  operator guide for triaging promising horizon-sweep cells before adding new
+  hypotheses
 - [`TESTING.md`](TESTING.md): validation ladder and phase gates
 - [`SECURITY.md`](SECURITY.md): secrets, vendor data, and local environment
 - [`SYMPHONY.md`](SYMPHONY.md): how to run Symphony against this repository

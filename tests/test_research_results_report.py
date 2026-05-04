@@ -68,6 +68,8 @@ def test_render_research_results_report_summarizes_candidate_verdicts() -> None:
         "| not_run | The hypothesis exists in the registry but no linked "
         "falsifier evaluation is available yet. |"
     ) in rendered
+    assert "Promising Candidate Review:" in rendered
+    assert "No promising cells found." in rendered
 
 
 def test_loader_uses_read_only_registry_sql() -> None:
@@ -159,6 +161,137 @@ def test_render_groups_horizon_sweep_rows_into_matrix_and_heatmap() -> None:
     assert (
         "| momentum_12_1 | 21 | 1/2 | 2015:+- | "
         "`+` beat baseline; `-` failed baseline. |"
+    ) in rendered
+
+
+def test_render_promising_candidate_review_recommends_next_actions() -> None:
+    payload = [
+        *_payload(),
+        {
+            "hypothesis_key": "avg_dollar_volume_63__h126",
+            "hypothesis_name": "Average Dollar Volume 63 (126d)",
+            "hypothesis_status": "rejected",
+            "hypothesis_signal_name": "avg_dollar_volume_63",
+            "hypothesis_universe_name": "falsifier_seed",
+            "hypothesis_horizon_days": 126,
+            "hypothesis_target_kind": "raw_return",
+            "hypothesis_metadata": {
+                "base_hypothesis_key": "avg_dollar_volume_63",
+                "horizon_sweep": True,
+                "selection_direction": "high",
+            },
+            "evaluation_status": "rejected",
+            "failure_reason": "walk_forward_unstable",
+            "backtest_run_id": 104,
+            "backtest_run_key": "backtest-dollar-volume-h126",
+            "backtest_status": "succeeded",
+            "backtest_universe_name": "falsifier_seed",
+            "backtest_horizon_days": 126,
+            "backtest_target_kind": "raw_return",
+            "backtest_parameters": {"strategy": "avg_dollar_volume_63"},
+            "backtest_metrics": {
+                "mean_strategy_net_horizon_return": 0.1000,
+                "walk_forward_windows": [
+                    {
+                        "test_start": "2020-01-02",
+                        "test_end": "2020-04-01",
+                        "net_difference_vs_baseline": 0.005,
+                    }
+                ],
+            },
+            "baseline_metrics": {
+                "equal_weight_universe": {
+                    "mean_net_horizon_return": 0.0950,
+                },
+                "strategy_vs_equal_weight_universe": {
+                    "mean_net_difference": 0.005,
+                },
+            },
+            "backtest_cost_assumptions": {"round_trip_cost_bps": 10},
+            "label_scramble_metrics": {
+                "status": "completed",
+                "p_value": 0.012,
+                "alpha": 0.05,
+            },
+            "label_scramble_pass": True,
+            "model_run_id": 204,
+            "model_run_key": "model-dollar-volume-h126",
+            "model_status": "succeeded",
+            "model_parameters": {"strategy": "avg_dollar_volume_63"},
+        },
+        {
+            "hypothesis_key": "avg_dollar_volume_63__h252",
+            "hypothesis_name": "Average Dollar Volume 63 (252d)",
+            "hypothesis_status": "promising",
+            "hypothesis_signal_name": "avg_dollar_volume_63",
+            "hypothesis_universe_name": "falsifier_seed",
+            "hypothesis_horizon_days": 252,
+            "hypothesis_target_kind": "raw_return",
+            "hypothesis_metadata": {
+                "base_hypothesis_key": "avg_dollar_volume_63",
+                "horizon_sweep": True,
+                "selection_direction": "high",
+            },
+            "evaluation_status": "promising",
+            "failure_reason": None,
+            "backtest_run_id": 105,
+            "backtest_run_key": "backtest-dollar-volume-h252",
+            "backtest_status": "succeeded",
+            "backtest_universe_name": "falsifier_seed",
+            "backtest_horizon_days": 252,
+            "backtest_target_kind": "raw_return",
+            "backtest_parameters": {"strategy": "avg_dollar_volume_63"},
+            "backtest_metrics": {
+                "mean_strategy_net_horizon_return": 0.2100,
+                "walk_forward_windows": [
+                    {
+                        "test_start": "2020-01-02",
+                        "test_end": "2020-12-31",
+                        "net_difference_vs_baseline": 0.020,
+                    },
+                    {
+                        "test_start": "2021-01-04",
+                        "test_end": "2021-12-31",
+                        "net_difference_vs_baseline": -0.002,
+                    },
+                    {
+                        "test_start": "2022-01-03",
+                        "test_end": "2022-12-30",
+                        "net_difference_vs_baseline": 0.030,
+                    },
+                ],
+            },
+            "baseline_metrics": {
+                "equal_weight_universe": {
+                    "mean_net_horizon_return": 0.1940,
+                },
+                "strategy_vs_equal_weight_universe": {
+                    "mean_net_difference": 0.016,
+                },
+            },
+            "backtest_cost_assumptions": {"round_trip_cost_bps": 10},
+            "label_scramble_metrics": {
+                "status": "completed",
+                "p_value": 0.010,
+                "alpha": 0.05,
+            },
+            "label_scramble_pass": True,
+            "model_run_id": 205,
+            "model_run_key": "model-dollar-volume-h252",
+            "model_status": "succeeded",
+            "model_parameters": {"strategy": "avg_dollar_volume_63"},
+        },
+    ]
+
+    report = load_research_results_report(FakeJsonClient(payload))
+    rendered = render_research_results_report(report)
+
+    assert "Promising Candidate Review:" in rendered
+    assert (
+        "| avg_dollar_volume_63__h252 | 252 | 2/3 (66.7%) | 1.6000% | "
+        "h126 rejected:walk_forward_unstable | pass p=0.0100 <= 0.0500 | "
+        "low (16.0x current cost) | deep_dive | large edge with usable "
+        "cost cushion; inspect drivers and replay evidence |"
     ) in rendered
 
 

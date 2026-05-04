@@ -66,6 +66,9 @@ class ResearchResultRow:
     baseline_net_return: float | None
     net_difference_vs_baseline: float | None
     label_scramble_pass: bool | None
+    label_scramble_p_value: float | None
+    label_scramble_alpha: float | None
+    round_trip_cost_bps: float | None
     backtest_run_id: int | None
     backtest_run_key: str | None
     model_run_key: str | None
@@ -167,6 +170,9 @@ def render_research_results_report(report: ResearchResultsReport) -> str:
         "Bucket Heatmaps:",
         _bucket_heatmap_table(report.results),
         "",
+        "Promising Candidate Review:",
+        _promising_candidate_review_table(report.results),
+        "",
         "Results:",
         _results_table(report.results),
         "",
@@ -207,6 +213,14 @@ def _research_result_row(
     model_parameters = _mapping(row.get("model_parameters"), "model_parameters")
     metrics = _mapping(row.get("backtest_metrics"), "backtest_metrics")
     baseline_metrics = _mapping(row.get("baseline_metrics"), "baseline_metrics")
+    label_scramble_metrics = _mapping(
+        row.get("label_scramble_metrics"),
+        "label_scramble_metrics",
+    )
+    backtest_cost_assumptions = _mapping(
+        row.get("backtest_cost_assumptions"),
+        "backtest_cost_assumptions",
+    )
 
     strategy = _parameter_str(backtest_parameters, "strategy") or _parameter_str(
         model_parameters,
@@ -277,6 +291,18 @@ def _research_result_row(
         baseline_net_return=baseline_net,
         net_difference_vs_baseline=difference,
         label_scramble_pass=label_scramble_pass,
+        label_scramble_p_value=_optional_float(
+            label_scramble_metrics.get("p_value"),
+            "label_scramble_metrics.p_value",
+        ),
+        label_scramble_alpha=_optional_float(
+            label_scramble_metrics.get("alpha"),
+            "label_scramble_metrics.alpha",
+        ),
+        round_trip_cost_bps=_optional_float(
+            backtest_cost_assumptions.get("round_trip_cost_bps"),
+            "backtest_cost_assumptions.round_trip_cost_bps",
+        ),
         backtest_run_id=backtest_run_id,
         backtest_run_key=_optional_str(row.get("backtest_run_key"), "backtest_run_key"),
         model_run_key=_optional_str(row.get("model_run_key"), "model_run_key"),
@@ -352,6 +378,7 @@ FROM (
         br.parameters AS backtest_parameters,
         br.metrics AS backtest_metrics,
         br.baseline_metrics,
+        br.cost_assumptions AS backtest_cost_assumptions,
         br.label_scramble_metrics,
         br.label_scramble_pass,
         br.multiple_comparisons_correction,
@@ -677,6 +704,217 @@ def _bucket_heatmap(buckets: Sequence[WalkForwardBucket]) -> str:
     return " ".join(
         f"{year}:{''.join(signs)}" for year, signs in sorted(by_year.items())
     )
+
+
+def _promising_candidate_review_table(results: Sequence[ResearchResultRow]) -> str:
+    promising = sorted(
+        (result for result in results if result.verdict == "promising"),
+        key=lambda result: (
+            result.base_hypothesis_key,
+            -1 if result.horizon_days is None else result.horizon_days,
+        ),
+    )
+    if not promising:
+        return "No promising cells found."
+
+    results_by_cell = {
+        (result.base_hypothesis_key, result.horizon_days): result
+        for result in results
+        if result.horizon_days is not None
+    }
+    rows: list[tuple[str, ...]] = []
+    for result in promising:
+        recommendation, reason = _promising_recommendation(result, results_by_cell)
+        rows.append(
+            (
+                result.hypothesis_key,
+                _int_or_na(result.horizon_days),
+                _positive_bucket_text(result),
+                _percent(result.net_difference_vs_baseline),
+                _adjacent_horizon_text(result, results_by_cell),
+                _label_scramble_text(result),
+                _cost_sensitivity_text(result),
+                recommendation,
+                reason,
+            )
+        )
+    return _table(
+        (
+            "Cell",
+            "Horizon",
+            "Positive buckets",
+            "Edge",
+            "Adjacent horizons",
+            "Label scramble",
+            "Cost sensitivity",
+            "Recommendation",
+            "Reason",
+        ),
+        rows,
+    )
+
+
+def _positive_bucket_text(result: ResearchResultRow) -> str:
+    if not result.walk_forward_buckets:
+        return "n/a"
+    positive, total = _positive_bucket_counts(result)
+    return f"{positive}/{total} ({positive / total:.1%})"
+
+
+def _positive_bucket_counts(result: ResearchResultRow) -> tuple[int, int]:
+    positive = sum(1 for bucket in result.walk_forward_buckets if bucket.sign == "+")
+    return positive, len(result.walk_forward_buckets)
+
+
+def _adjacent_horizon_text(
+    result: ResearchResultRow,
+    results_by_cell: Mapping[tuple[str, int], ResearchResultRow],
+) -> str:
+    if result.horizon_days is None:
+        return "n/a"
+    adjacent_horizons = _adjacent_horizons(result.horizon_days)
+    if not adjacent_horizons:
+        return "n/a"
+    parts: list[str] = []
+    for horizon in adjacent_horizons:
+        adjacent = results_by_cell.get((result.base_hypothesis_key, horizon))
+        if adjacent is None:
+            parts.append(f"h{horizon} pending")
+            continue
+        parts.append(f"h{horizon} {_review_verdict(adjacent)}")
+    return ", ".join(parts)
+
+
+def _review_verdict(result: ResearchResultRow) -> str:
+    if result.verdict in {"accepted", "promising", "running", "untested"}:
+        return result.verdict
+    return f"{result.verdict}:{result.failure_reason}"
+
+
+def _adjacent_horizons(horizon: int) -> tuple[int, ...]:
+    horizons = tuple(CANONICAL_HORIZONS)
+    if horizon not in horizons:
+        return ()
+    index = horizons.index(horizon)
+    adjacent: list[int] = []
+    if index > 0:
+        adjacent.append(horizons[index - 1])
+    if index + 1 < len(horizons):
+        adjacent.append(horizons[index + 1])
+    return tuple(adjacent)
+
+
+def _label_scramble_text(result: ResearchResultRow) -> str:
+    if result.label_scramble_pass is False:
+        return "fail"
+    if result.label_scramble_pass is None:
+        return "missing"
+    if result.label_scramble_p_value is None:
+        return "pass p=n/a"
+    if result.label_scramble_alpha is None:
+        return f"pass p={result.label_scramble_p_value:.4f}"
+    return (
+        f"pass p={result.label_scramble_p_value:.4f} "
+        f"<= {result.label_scramble_alpha:.4f}"
+    )
+
+
+def _cost_sensitivity_text(result: ResearchResultRow) -> str:
+    multiple = _cost_edge_multiple(result)
+    if multiple is None:
+        return "unknown"
+    if multiple >= 5:
+        return f"low ({multiple:.1f}x current cost)"
+    if multiple >= 1:
+        return f"medium ({multiple:.1f}x current cost)"
+    return f"high ({multiple:.1f}x current cost)"
+
+
+def _cost_edge_multiple(result: ResearchResultRow) -> float | None:
+    if result.net_difference_vs_baseline is None or result.round_trip_cost_bps is None:
+        return None
+    cost_fraction = result.round_trip_cost_bps / 10_000.0
+    if cost_fraction <= 0:
+        return None
+    return result.net_difference_vs_baseline / cost_fraction
+
+
+def _promising_recommendation(
+    result: ResearchResultRow,
+    results_by_cell: Mapping[tuple[str, int], ResearchResultRow],
+) -> tuple[str, str]:
+    edge = result.net_difference_vs_baseline
+    positive_rate = _positive_bucket_rate(result)
+    cost_multiple = _cost_edge_multiple(result)
+    adjacent_health = _adjacent_horizon_health(result, results_by_cell)
+
+    if result.label_scramble_p_value is None:
+        return "watch", "label-scramble p-value is missing from the report row"
+    if edge is None:
+        return "demote", "edge versus baseline is missing"
+    if cost_multiple is not None and cost_multiple < 1:
+        return "demote", "edge is smaller than one current round-trip cost"
+    if positive_rate is not None and positive_rate < 0.60:
+        return "demote", "bucket win rate is below the current promising gate"
+
+    if (
+        edge >= 0.01
+        and (cost_multiple is None or cost_multiple >= 5)
+        and adjacent_health != "weak"
+    ):
+        return (
+            "deep_dive",
+            "large edge with usable cost cushion; inspect drivers and replay evidence",
+        )
+
+    concerns: list[str] = []
+    if positive_rate is None:
+        concerns.append("bucket evidence is missing")
+    elif positive_rate < 0.65:
+        concerns.append("bucket win rate is near the 60% gate")
+    if edge < 0.005:
+        concerns.append("edge is small")
+    if adjacent_health == "weak":
+        concerns.append("adjacent horizons are weak")
+    elif adjacent_health == "mixed":
+        concerns.append("adjacent horizons are mixed")
+    if cost_multiple is None:
+        concerns.append("cost sensitivity is unknown")
+
+    if not concerns:
+        concerns.append("passed gates but still needs operator review")
+    return "watch", "; ".join(concerns[:2])
+
+
+def _positive_bucket_rate(result: ResearchResultRow) -> float | None:
+    if not result.walk_forward_buckets:
+        return None
+    positive, total = _positive_bucket_counts(result)
+    return positive / total
+
+
+def _adjacent_horizon_health(
+    result: ResearchResultRow,
+    results_by_cell: Mapping[tuple[str, int], ResearchResultRow],
+) -> str:
+    if result.horizon_days is None:
+        return "unknown"
+    adjacent = [
+        results_by_cell.get((result.base_hypothesis_key, horizon))
+        for horizon in _adjacent_horizons(result.horizon_days)
+    ]
+    adjacent_results = [item for item in adjacent if item is not None]
+    if not adjacent_results:
+        return "unknown"
+    if any(item.verdict in {"accepted", "promising"} for item in adjacent_results):
+        return "supportive"
+    if any(
+        item.net_difference_vs_baseline is None
+        or item.net_difference_vs_baseline <= 0
+        for item in adjacent_results
+    ):
+        return "weak"
+    return "mixed"
 
 
 def _reason_table(results: Sequence[ResearchResultRow]) -> str:
