@@ -17,6 +17,16 @@ from silver.features.candidate_pack import (
 from silver.time.trading_calendar import CANONICAL_HORIZONS
 
 
+PROMISING_DEEP_DIVE_BASE_HYPOTHESIS_KEY = "avg_dollar_volume_63"
+PROMISING_DEEP_DIVE_HORIZON_DAYS = 252
+PROMISING_DEEP_DIVE_MOMENTUM_BASE_KEYS = (
+    "momentum_12_1",
+    "momentum_6_1",
+    "momentum_3_0",
+)
+PROMISING_DEEP_DIVE_COMPARISON_HORIZONS = (63, 126, 252)
+
+
 class ResearchResultsError(ValueError):
     """Raised when persisted research results cannot be summarized."""
 
@@ -175,6 +185,9 @@ def render_research_results_report(report: ResearchResultsReport) -> str:
         "",
         "Promising Candidate Review:",
         _promising_candidate_review_table(report.results),
+        "",
+        "Promising Deep Dive v0:",
+        *_promising_deep_dive_lines(report.results),
         "",
         "Results:",
         _results_table(report.results),
@@ -775,6 +788,278 @@ def _promising_candidate_summary_lines(
     return lines
 
 
+def _promising_deep_dive_lines(
+    results: Sequence[ResearchResultRow],
+) -> list[str]:
+    results_by_cell = _results_by_cell(results)
+    target = results_by_cell.get(
+        (
+            PROMISING_DEEP_DIVE_BASE_HYPOTHESIS_KEY,
+            PROMISING_DEEP_DIVE_HORIZON_DAYS,
+        )
+    )
+    target_key = (
+        f"{PROMISING_DEEP_DIVE_BASE_HYPOTHESIS_KEY}"
+        f"__h{PROMISING_DEEP_DIVE_HORIZON_DAYS}"
+    )
+    if target is None:
+        return [
+            f"No stored row found for `{target_key}`. Run the horizon sweep "
+            "before opening the first deep dive."
+        ]
+
+    recommendation, reason = _deep_dive_recommendation(target, results_by_cell)
+    lines = [
+        f"Cell: {target.hypothesis_key}",
+        f"Recommendation: {recommendation}",
+        f"Reason: {reason}",
+        "",
+        "Summary:",
+        (
+            "- edge: "
+            f"{_signed_percent(target.net_difference_vs_baseline)} versus "
+            "equal-weight baseline"
+        ),
+        f"- bucket breadth: {_positive_bucket_text(target)}",
+        f"- concentration: {_temporal_concentration_text(target)}",
+        f"- adjacent horizon read: {_deep_dive_adjacent_summary(target, results_by_cell)}",
+        f"- cost sensitivity: {_cost_sensitivity_text(target)}",
+        (
+            "- overlap risk: pattern-only momentum proxy is available; true "
+            "ticker overlap is not available in current report rows"
+        ),
+        "",
+        "Year/Bucket Drivers:",
+        _deep_dive_year_driver_table(target),
+        "",
+        "Weakest Buckets:",
+        _weakest_bucket_table(target),
+        "",
+        "Adjacent Horizon Comparison:",
+        _deep_dive_adjacent_table(target, results_by_cell),
+        "",
+        "Momentum Overlap Proxy:",
+        (
+            "- This compares stored verdict, edge, and bucket patterns only; "
+            "it is not ticker-overlap evidence."
+        ),
+        *_momentum_overlap_proxy_lines(results_by_cell),
+        "",
+        "Selected Tickers:",
+        (
+            "- not_available: stored selection attribution is not available in "
+            "current report rows."
+        ),
+        "",
+        "Exposure Notes:",
+        (
+            "- high dollar volume can be size, liquidity, or mega-cap exposure; "
+            "treat this as a baseline/control candidate until ticker "
+            "attribution exists."
+        ),
+        (
+            "- h252 passing while h126 is not validated means the annual "
+            "horizon needs driver inspection before any promotion."
+        ),
+        "",
+        "Decision:",
+        f"- {recommendation}: {reason}",
+    ]
+    return lines
+
+
+def _deep_dive_recommendation(
+    target: ResearchResultRow,
+    results_by_cell: Mapping[tuple[str, int], ResearchResultRow],
+) -> tuple[str, str]:
+    if target.verdict != "promising":
+        return "demote", f"target verdict is {_review_verdict(target)}"
+
+    edge = target.net_difference_vs_baseline
+    if edge is None:
+        return "demote", "edge versus baseline is missing"
+    if edge <= 0:
+        return "demote", "edge versus baseline is not positive"
+
+    cost_multiple = _cost_edge_multiple(target)
+    if cost_multiple is not None and cost_multiple < 1:
+        return "demote", "edge is smaller than one current round-trip cost"
+
+    positive_rate = _positive_bucket_rate(target)
+    if positive_rate is not None and positive_rate < 0.60:
+        return "demote", "bucket win rate is below the current promising gate"
+
+    concerns: list[str] = []
+    if positive_rate is None:
+        concerns.append("bucket evidence is missing")
+    elif positive_rate < 0.65:
+        concerns.append("bucket breadth is near the 60% gate")
+
+    adjacent_health = _adjacent_horizon_health(target, results_by_cell)
+    if adjacent_health == "weak":
+        concerns.append("adjacent horizon evidence is weak")
+    elif adjacent_health == "mixed":
+        concerns.append("adjacent horizon evidence is mixed")
+    elif adjacent_health == "unknown":
+        concerns.append("adjacent horizon evidence is missing")
+
+    if cost_multiple is None:
+        concerns.append("cost sensitivity is unknown")
+
+    concerns.append("ticker concentration is unavailable")
+    if concerns:
+        return "watch", "; ".join(concerns[:3])
+
+    return (
+        "continue",
+        "edge is broad, cost cushion is usable, and adjacent evidence supports it",
+    )
+
+
+def _temporal_concentration_text(result: ResearchResultRow) -> str:
+    if not result.walk_forward_buckets:
+        return "unknown; no walk-forward bucket evidence"
+
+    positive_edges = [
+        bucket.net_difference_vs_baseline
+        for bucket in result.walk_forward_buckets
+        if bucket.net_difference_vs_baseline > 0
+    ]
+    total_positive_edge = sum(positive_edges)
+    if total_positive_edge <= 0:
+        return "no positive bucket edge"
+
+    top_bucket = max(
+        result.walk_forward_buckets,
+        key=lambda bucket: bucket.net_difference_vs_baseline,
+    )
+    share = top_bucket.net_difference_vs_baseline / total_positive_edge
+    return (
+        "largest positive bucket contributes "
+        f"{share:.1%} of positive bucket edge "
+        f"({_date_range_text(top_bucket)})"
+    )
+
+
+def _deep_dive_adjacent_summary(
+    target: ResearchResultRow,
+    results_by_cell: Mapping[tuple[str, int], ResearchResultRow],
+) -> str:
+    adjacent = [
+        results_by_cell.get((target.base_hypothesis_key, horizon))
+        for horizon in _adjacent_horizons(target.horizon_days or 0)
+    ]
+    adjacent_results = [item for item in adjacent if item is not None]
+    if not adjacent_results:
+        return "no adjacent horizon rows found"
+    return "; ".join(
+        f"h{result.horizon_days} {_review_verdict(result)} "
+        f"edge {_signed_percent(result.net_difference_vs_baseline)}"
+        for result in adjacent_results
+    )
+
+
+def _deep_dive_year_driver_table(result: ResearchResultRow) -> str:
+    if not result.walk_forward_buckets:
+        return "No walk-forward bucket windows found."
+
+    by_year: dict[str, list[WalkForwardBucket]] = {}
+    for bucket in result.walk_forward_buckets:
+        by_year.setdefault(bucket.year, []).append(bucket)
+
+    rows: list[tuple[str, ...]] = []
+    for year, buckets in sorted(by_year.items()):
+        positive = sum(1 for bucket in buckets if bucket.sign == "+")
+        average_edge = _mean(
+            [bucket.net_difference_vs_baseline for bucket in buckets]
+        )
+        rows.append(
+            (
+                year,
+                f"{positive}/{len(buckets)} ({positive / len(buckets):.1%})",
+                _signed_percent(average_edge),
+                "".join(bucket.sign for bucket in buckets),
+            )
+        )
+
+    return _table(("Year", "Positive buckets", "Average edge", "Pattern"), rows)
+
+
+def _weakest_bucket_table(result: ResearchResultRow) -> str:
+    if not result.walk_forward_buckets:
+        return "No walk-forward bucket windows found."
+
+    weakest = sorted(
+        result.walk_forward_buckets,
+        key=lambda bucket: bucket.net_difference_vs_baseline,
+    )[:5]
+    rows = [
+        (
+            bucket.test_start or "unknown",
+            bucket.test_end or "unknown",
+            _signed_percent(bucket.net_difference_vs_baseline),
+            bucket.sign,
+        )
+        for bucket in weakest
+    ]
+    return _table(("Test start", "Test end", "Edge", "Sign"), rows)
+
+
+def _deep_dive_adjacent_table(
+    target: ResearchResultRow,
+    results_by_cell: Mapping[tuple[str, int], ResearchResultRow],
+) -> str:
+    rows: list[tuple[str, ...]] = []
+    for horizon in PROMISING_DEEP_DIVE_COMPARISON_HORIZONS:
+        result = results_by_cell.get((target.base_hypothesis_key, horizon))
+        if result is None:
+            rows.append((f"h{horizon}", "pending", "n/a", "n/a", "n/a"))
+            continue
+        rows.append(
+            (
+                f"h{horizon}",
+                _review_verdict(result),
+                _signed_percent(result.net_difference_vs_baseline),
+                _positive_bucket_text(result),
+                _cost_sensitivity_text(result),
+            )
+        )
+    return _table(("Horizon", "Verdict", "Edge", "Buckets", "Cost"), rows)
+
+
+def _momentum_overlap_proxy_lines(
+    results_by_cell: Mapping[tuple[str, int], ResearchResultRow],
+) -> list[str]:
+    lines: list[str] = []
+    for base_key in PROMISING_DEEP_DIVE_MOMENTUM_BASE_KEYS:
+        if lines:
+            lines.append("")
+        lines.append(f"{base_key}:")
+        for horizon in PROMISING_DEEP_DIVE_COMPARISON_HORIZONS:
+            lines.append(
+                "- h"
+                f"{horizon}: "
+                f"{_compact_horizon_cell(results_by_cell.get((base_key, horizon)))}"
+            )
+    return lines
+
+
+def _compact_horizon_cell(result: ResearchResultRow | None) -> str:
+    if result is None:
+        return "pending"
+    return (
+        f"{_review_verdict(result)}, "
+        f"edge {_signed_percent(result.net_difference_vs_baseline)}, "
+        f"buckets {_positive_bucket_text(result)}"
+    )
+
+
+def _date_range_text(bucket: WalkForwardBucket) -> str:
+    start = bucket.test_start or "unknown"
+    end = bucket.test_end or "unknown"
+    return f"{start} to {end}"
+
+
 def _promising_results(
     results: Sequence[ResearchResultRow],
 ) -> list[ResearchResultRow]:
@@ -870,6 +1155,8 @@ def _cost_sensitivity_text(result: ResearchResultRow) -> str:
         return f"low ({multiple:.1f}x current cost)"
     if multiple >= 1:
         return f"medium ({multiple:.1f}x current cost)"
+    if multiple < 0:
+        return "high (negative edge)"
     return f"high ({multiple:.1f}x current cost)"
 
 
@@ -1180,6 +1467,12 @@ def _horizon_text(values: Sequence[int]) -> str:
     if not values:
         return "none"
     return ", ".join(str(value) for value in values) + " trading sessions"
+
+
+def _mean(values: Sequence[float]) -> float:
+    if not values:
+        raise ResearchResultsError("mean requires at least one value")
+    return sum(values) / len(values)
 
 
 def _family_key(value: str) -> tuple[int, str]:

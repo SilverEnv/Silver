@@ -97,10 +97,10 @@ The deep dive should answer these questions in order.
 | Would higher costs erase it? | Recompute or approximate edge under larger cost assumptions. | Edge disappears under modest cost increases. |
 | Does it overlap with momentum? | Compare selected names and positive buckets with momentum cells. | The cell is just a momentum proxy. |
 
-## Required Output
+## Generated Output
 
-The first implementation should generate a read-only section or report with
-this shape:
+The research cockpit now generates a read-only `Promising Deep Dive v0` section
+inside `reports/research/results_v0.md` when this stored cell exists:
 
 ```text
 Promising Deep Dive v0
@@ -131,6 +131,22 @@ Decision:
 ```
 
 The recommendation is a deep-dive recommendation, not a registry status.
+
+The v0 implementation uses stored report evidence only:
+
+- bucket/year drivers from `backtest_runs.metrics.walk_forward_windows`
+- current edge versus the equal-weight baseline
+- current cost sensitivity
+- adjacent horizon rows for the same base hypothesis
+- a pattern-only momentum proxy using stored momentum horizon rows
+
+It does not claim ticker concentration yet. Until selected-security attribution
+is queryable, the generated section must say:
+
+```text
+Selected Tickers:
+- not_available: stored selection attribution is not available in current report rows.
+```
 
 ## Recommendation Labels
 
@@ -207,12 +223,14 @@ Do not:
 
 Use the smallest useful build:
 
-1. Add a readable generated `Promising Deep Dive` section for
+1. [x] Add a readable generated `Promising Deep Dive` section for
    `avg_dollar_volume_63__h252`.
-2. Include bucket/year contribution and adjacent-horizon comparison.
-3. Add ticker-selection attribution only if the stored evidence supports it.
-4. Add cost stress only after the current cost assumptions are shown.
-5. Only then consider generalizing the deep-dive code to other cells.
+2. [x] Include bucket/year contribution and adjacent-horizon comparison.
+3. [x] Show current cost sensitivity from stored cost assumptions.
+4. [x] State plainly when ticker-selection attribution is unavailable.
+5. [ ] Add ticker-selection attribution only if the stored evidence supports it.
+6. [ ] Add richer cost stress only after the current cost assumptions are shown.
+7. [ ] Only then consider generalizing the deep-dive code to other cells.
 
 Do not start with a generalized dashboard. One inspected survivor is enough for
 v0.
@@ -233,4 +251,3 @@ python scripts/research_results_report.py
 python -m pytest tests/test_research_results_report.py
 git diff --check
 ```
-

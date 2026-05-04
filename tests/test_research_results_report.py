@@ -72,6 +72,11 @@ def test_render_research_results_report_summarizes_candidate_verdicts() -> None:
     assert "No promising cells found." in rendered
     assert "Promising Candidate Review:" in rendered
     assert "No promising cells found." in rendered
+    assert "Promising Deep Dive v0:" in rendered
+    assert (
+        "No stored row found for `avg_dollar_volume_63__h252`. Run the horizon "
+        "sweep before opening the first deep dive."
+    ) in rendered
 
 
 def test_loader_uses_read_only_registry_sql() -> None:
@@ -306,6 +311,34 @@ def test_render_promising_candidate_review_recommends_next_actions() -> None:
         "h126 rejected:walk_forward_unstable | pass p=0.0100 <= 0.0500 | "
         "low (16.0x current cost) | deep_dive | large edge with usable "
         "cost cushion; inspect drivers and replay evidence |"
+    ) in rendered
+    assert "Promising Deep Dive v0:" in rendered
+    assert "Cell: avg_dollar_volume_63__h252" in rendered
+    assert "Recommendation: watch" in rendered
+    assert (
+        "Reason: adjacent horizon evidence is mixed; ticker concentration is "
+        "unavailable"
+    ) in rendered
+    assert (
+        "- concentration: largest positive bucket contributes 60.0% of positive "
+        "bucket edge (2022-01-03 to 2022-12-30)"
+    ) in rendered
+    assert (
+        "| 2021 | 0/1 (0.0%) | -0.2000% | - |"
+    ) in rendered
+    assert (
+        "| h126 | rejected:walk_forward_unstable | +0.5000% | 1/1 (100.0%) | "
+        "low (5.0x current cost) |"
+    ) in rendered
+    assert (
+        "momentum_12_1:\n"
+        "- h63: rejected:baseline_failed, edge -0.0400%, buckets 0/1 (0.0%)\n"
+        "- h126: pending\n"
+        "- h252: pending"
+    ) in rendered
+    assert (
+        "- not_available: stored selection attribution is not available in "
+        "current report rows."
     ) in rendered
 
 
