@@ -379,6 +379,12 @@ The deep-dive report should answer:
 The deep dive should still be read-only. It should not promote
 `avg_dollar_volume_63__h252` to `accepted`.
 
+Detailed operating rules for that inspection live in:
+
+```text
+docs/PROMISING_DEEP_DIVE_V0.md
+```
+
 ## Promotion Boundary
 
 Promising is a triage label. It should not automatically become accepted.

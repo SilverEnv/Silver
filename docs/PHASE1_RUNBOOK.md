@@ -421,6 +421,13 @@ promising cell as `deep_dive`, `watch`, or `demote`. They do not mutate
 hypothesis status. The goal is to decide where to spend the next research cycle
 before widening the search space.
 
+When a cell is labeled `deep_dive`, use the deep-dive operator guide before
+building more hypotheses:
+
+```text
+docs/PROMISING_DEEP_DIVE_V0.md
+```
+
 ## 9. Read The Falsifier Report
 
 Start with `Status`, `Data Coverage`, and `Failure Modes`. Then check
